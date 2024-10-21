@@ -18,6 +18,14 @@
       {
         "command": "localastrodb.openDatabase",
         "title": "Local AstroDB: Open .db file"
+      },
+      {
+        "command": "localastrodb.refresh",
+        "title": "Local AstroDB: Refresh Tree View"
+      },
+      {
+        "command": "localastrodb.viewTableData",
+        "title": "Local AstroDB: View Table Data"
       }
     ],
     "viewsContainers": {
@@ -30,7 +38,7 @@
       ]
     },
     "views": {
-      "localastrodbViewer": [
+      "localastrodb": [
         {
           "id": "localastrodbTreeView",
           "name": "Database Schema"
