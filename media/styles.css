@@ -1,0 +1,113 @@
+/* media/styles.css */
+
+/* Import Google Fonts */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500&display=swap');
+
+body {
+  font-family: 'Inter', sans-serif;
+  padding: 10px;
+  background-color: #121212;
+  color: #121212;
+}
+
+/* Responsive Table Container */
+table {
+  border-collapse: collapse;
+  width: 100%;
+  table-layout: auto;
+  overflow-x: auto;
+  background-color: #fff;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  border-radius: 10px;
+}
+
+/* Sticky Header */
+thead {
+  position: sticky;
+  top: 0;
+  background-color: #0055ff;
+  color: #fff;
+  z-index: 1;
+  border-radius: 10px;
+}
+
+/* Table Header Styling */
+th {
+  padding: 12px 15px;
+  text-align: left;
+  font-weight: 500;
+  font-size: 14px;
+  border-bottom: 1px solid #ddd;
+}
+
+/* Table Body Styling */
+td {
+  padding: 12px 15px;
+  border-bottom: 1px solid #000000;
+  font-size: 13px;
+}
+
+/* Alternate Row Coloring */
+tbody tr:nth-child(even) {
+  background-color: #f9fafb;
+}
+
+/* Hover Effects */
+tbody tr:hover {
+  background-color: #00000037;
+  cursor: pointer;
+}
+
+/* Editable Cells */
+td[contenteditable="true"] {
+  background-color: #fff5e6;
+}
+
+/* Editable Cells on Focus */
+td[contenteditable="true"]:focus {
+  outline: 2px solid #ffbf47;
+}
+
+/* Buttons */
+button {
+  margin-top: 15px;
+  padding: 12px 20px;
+  font-size: 14px;
+  background-color: #007acc;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+/* Button Hover Effect */
+button:hover {
+  background-color: #005a9e;
+}
+
+/* Responsive Design */
+@media screen and (max-width: 768px) {
+  th, td {
+    padding: 10px;
+    font-size: 12px;
+  }
+}
+
+/* Scrollbar Styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #bbb;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #999;
+}

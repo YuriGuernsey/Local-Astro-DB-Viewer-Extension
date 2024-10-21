@@ -1,0 +1,5 @@
+<!-- media/icon.svg -->
+<svg height="100" width="100" xmlns="http://www.w3.org/2000/svg">
+  <rect fill="#4F8A8B" height="100" width="100"/>
+  <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#FFFFFF" font-size="48">DB</text>
+</svg>
