@@ -80,7 +80,7 @@ class TreeItem extends vscode.TreeItem {
     if (contextValue === 'table') {
       this.iconPath = new vscode.ThemeIcon('database');
       this.command = {
-        command: 'localastrodbViewer.viewTableData',
+        command: 'localastrodb.viewTableData',
         title: 'View Table Data',
         arguments: [label],
       };
