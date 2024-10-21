@@ -3,7 +3,8 @@
   "displayName": "Local AstroDB Viewer",
   "description": "View and interact with .db files in VS Code",
   "version": "1.0.0",
-  "publisher": "yuriguernsey",
+  "publisher": "YuriAlvesGuernsey",
+  "icon": "media/logo.png",
   "engines": {
     "vscode": "^1.70.0"
   },

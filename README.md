@@ -1,5 +1,5 @@
 # Local AstroDB Viewer
-https://code.visualstudio.com/api/working-with-extensions/publishing-extension
+
 View and interact with `.db` files directly in Visual Studio Code.
 
 ## Features
