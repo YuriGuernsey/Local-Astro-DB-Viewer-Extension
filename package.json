@@ -2,23 +2,23 @@
   "name": "localastrodb",
   "displayName": "Local AstroDB Viewer",
   "description": "View and interact with .db files in VS Code",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "publisher": "YuriAlvesGuernsey",
   "icon": "media/logo.png",
   "engines": {
     "vscode": "^1.70.0"
   },
   "configuration": {
-  "type": "object",
-  "title": "Local AstroDB Configuration",
-  "properties": {
-    "localastrodb.databasePath": {
-      "type": "string",
-      "default": "/workspaces/codingsnippetshare/.astro/content.db",
-      "description": "The absolute path to the database file to open automatically."
+    "type": "object",
+    "title": "Local AstroDB Configuration",
+    "properties": {
+      "localastrodb.databasePath": {
+        "type": "string",
+        "default": "/workspaces/codingsnippetshare/.astro/content.db",
+        "description": "The absolute path to the database file to open automatically."
+      }
     }
-  }
-},
+  },
   "activationEvents": [
     "onCommand:localastrodb.openDatabase",
     "onCommand:localastrodb.openQueryEditor"
