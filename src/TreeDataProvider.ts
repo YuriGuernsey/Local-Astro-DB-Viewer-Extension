@@ -40,7 +40,13 @@ export class DatabaseTreeDataProvider implements vscode.TreeDataProvider<TreeIte
         const columns = await dbAll<ColumnInfo>(`PRAGMA table_info(${element.label})`);
 
         return columns.map(
-          (col) => new TreeItem(col.name, vscode.TreeItemCollapsibleState.None, 'column')
+          (col) =>
+            new TreeItem(
+              col.name,
+              vscode.TreeItemCollapsibleState.None,
+              'column',
+              col
+            )
         );
       } else {
         return [];
@@ -73,7 +79,8 @@ class TreeItem extends vscode.TreeItem {
   constructor(
     public readonly label: string,
     public readonly collapsibleState: vscode.TreeItemCollapsibleState,
-    public readonly contextValue: string
+    public readonly contextValue: string,
+    public readonly columnInfo?: ColumnInfo
   ) {
     super(label, collapsibleState);
 
@@ -86,6 +93,14 @@ class TreeItem extends vscode.TreeItem {
       };
     } else if (contextValue === 'column') {
       this.iconPath = new vscode.ThemeIcon('symbol-field');
+      if (columnInfo) {
+        this.description = columnInfo.type;
+        this.tooltip = `Type: ${columnInfo.type}
+Not Null: ${columnInfo.notnull ? 'Yes' : 'No'}
+Default Value: ${columnInfo.dflt_value !== null ? columnInfo.dflt_value : 'None'}
+Primary Key: ${columnInfo.pk ? 'Yes' : 'No'}
+Auto Increment: ${columnInfo.pk && columnInfo.type.toLowerCase() === 'integer' ? 'Yes' : 'No'}`;
+      }
     }
   }
 }

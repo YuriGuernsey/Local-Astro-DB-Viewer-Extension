@@ -1,20 +1,46 @@
 // src/extension.ts
+
 import * as vscode from 'vscode';
 import * as sqlite3 from 'sqlite3';
 import { promisify } from 'util';
 import * as path from 'path';
+import * as fs from 'fs';
 import { DatabaseTreeDataProvider } from './TreeDataProvider';
 
 let db: sqlite3.Database | null = null;
 let dbPath: string | null = null;
 
 export function activate(context: vscode.ExtensionContext) {
+  const config = vscode.workspace.getConfiguration('localastrodb');
+  const databasePath = config.get<string>('databasePath');
+
+  if (databasePath) {
+    openDatabaseAtPath(databasePath);
+  }
+
   context.subscriptions.push(
     vscode.commands.registerCommand('localastrodb.openDatabase', openDatabase),
     vscode.commands.registerCommand('localastrodb.openQueryEditor', openQueryEditor),
     vscode.commands.registerCommand('localastrodb.refresh', refreshTreeView),
     vscode.commands.registerCommand('localastrodb.viewTableData', viewTableData)
   );
+}
+
+function openDatabaseAtPath(dbFilePath: string) {
+  if (!fs.existsSync(dbFilePath)) {
+    vscode.window.showErrorMessage(`Database file not found at path: ${dbFilePath}`);
+    return;
+  }
+
+  dbPath = dbFilePath;
+  db = new sqlite3.Database(dbPath, (err) => {
+    if (err) {
+      vscode.window.showErrorMessage(`Failed to open database at ${dbPath}: ${err.message}`);
+      return;
+    }
+    vscode.window.showInformationMessage(`Opened database: ${dbPath}`);
+    initializeTreeView();
+  });
 }
 
 async function openDatabase() {
@@ -24,15 +50,7 @@ async function openDatabase() {
   });
 
   if (uri && uri[0]) {
-    dbPath = uri[0].fsPath;
-    db = new sqlite3.Database(dbPath, (err) => {
-      if (err) {
-        vscode.window.showErrorMessage(`Failed to open database: ${err.message}`);
-        return;
-      }
-      vscode.window.showInformationMessage(`Opened database: ${dbPath}`);
-      initializeTreeView();
-    });
+    openDatabaseAtPath(uri[0].fsPath);
   }
 }
 
@@ -149,24 +167,24 @@ function getQueryEditorContent(cspSource: string): string {
   `;
 }
 
+async function getTableData(tableName: string): Promise<any[]> {
+  const query = `SELECT * FROM ${tableName} LIMIT 100`;
+  const dbAll = <T>(sql: string) => promisify(db!.all.bind(db))(sql) as Promise<T[]>;
+  const rows = await dbAll<any>(query);
+  return rows;
+}
+
 async function viewTableData(tableName: string) {
   if (!db) {
     vscode.window.showErrorMessage('No database is currently open. Please open a database first.');
     return;
   }
 
-  const query = `SELECT * FROM ${tableName} LIMIT 100`;
-  const dbAll = <T>(sql: string) => promisify(db!.all.bind(db))(sql) as Promise<T[]>;
-
   try {
-    const rows = await dbAll<any>(query);
+    const rows = await getTableData(tableName);
     displayDataInTable(rows, tableName);
   } catch (err) {
-    if (err instanceof Error) {
-      vscode.window.showErrorMessage(`Error fetching data: ${err.message}`);
-    } else {
-      vscode.window.showErrorMessage('An unknown error occurred.');
-    }
+    vscode.window.showErrorMessage(`Error fetching data: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -194,7 +212,7 @@ function displayDataInTable(rows: any[], tableName: string) {
   );
 
   const cspSource = panel.webview.cspSource;
-  panel.webview.html = getWebviewContent(rows, styleUri, cspSource);
+  panel.webview.html = getWebviewContent(rows, styleUri, cspSource, tableName);
 
   panel.webview.onDidReceiveMessage(
     async (message) => {
@@ -210,6 +228,13 @@ function displayDataInTable(rows: any[], tableName: string) {
             vscode.window.showErrorMessage('An unknown error occurred while saving data.');
           }
         }
+      } else if (message.command === 'refreshData') {
+        try {
+          const refreshedRows = await getTableData(message.tableName);
+          panel.webview.html = getWebviewContent(refreshedRows, styleUri, cspSource, tableName);
+        } catch (err) {
+          vscode.window.showErrorMessage(`Error refreshing data: ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
     },
     undefined,
@@ -217,7 +242,7 @@ function displayDataInTable(rows: any[], tableName: string) {
   );
 }
 
-function getWebviewContent(rows: any[], styleUri: vscode.Uri, cspSource: string): string {
+function getWebviewContent(rows: any[], styleUri: vscode.Uri, cspSource: string, tableName: string): string {
   if (rows.length === 0) {
     return `<html><body><h3>No data available.</h3></body></html>`;
   }
@@ -242,6 +267,7 @@ function getWebviewContent(rows: any[], styleUri: vscode.Uri, cspSource: string)
     <link href="${styleUri}" rel="stylesheet">
   </head>
   <body>
+    <button id="refreshButton">Refresh</button>
     <table>
       <thead>
         <tr>${tableHeader}</tr>
@@ -254,7 +280,12 @@ function getWebviewContent(rows: any[], styleUri: vscode.Uri, cspSource: string)
     <script>
       const vscode = acquireVsCodeApi();
       const columns = ${JSON.stringify(columns)};
-      
+      const tableName = ${JSON.stringify(tableName)};
+
+      document.getElementById('refreshButton').addEventListener('click', () => {
+        vscode.postMessage({ command: 'refreshData', tableName });
+      });
+
       function saveChanges() {
         const table = document.querySelector('table');
         const data = [];

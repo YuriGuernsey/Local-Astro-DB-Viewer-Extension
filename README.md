@@ -47,6 +47,37 @@ No additional settings required.
 
 - Initial release with all features.
 
+### 1.1.0
+
+- Logo Update (still not final)
+
+### 1.2.0
+
+- Added Table view.
+
+### 1.3.0
+
+- Fixed some minor bugs.
+
+
+### 1.4.0
+
+- Auto fetch db.
+- Fixed Icon in Activity bar
+- Added refresh to table view 
+- In Tree View show data types
+
+### Future development
+
+- Save changes to seed file 
+- Allow users to add new row
+- Allow users to delete row
+- Refresh data, on seed file watch
+- UI Refresh
+- Logo Refresh
+
+If there is anything you think should be added or fixed, let me know 
+
 ---
 
 **Enjoy using Local AstroDB Viewer!**
