@@ -87,11 +87,11 @@
     "typescript": "^4.9.5",
     "vsce": "^1.97.0"
   },
-  "dependencies": {
-    "sqlite3": "^5.0.11"
-  },
   "files": [
     "out/**/*",
     "media/**/*"
-  ]
+  ],
+  "dependencies": {
+    "vscode-sqlite3": "^4.0.11"
+  }
 }

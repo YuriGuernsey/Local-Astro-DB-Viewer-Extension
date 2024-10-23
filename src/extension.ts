@@ -1,7 +1,7 @@
 // src/extension.ts
 
 import * as vscode from 'vscode';
-import * as sqlite3 from 'sqlite3';
+import * as sqlite3 from 'vscode-sqlite3';
 import { promisify } from 'util';
 import * as path from 'path';
 import * as fs from 'fs';

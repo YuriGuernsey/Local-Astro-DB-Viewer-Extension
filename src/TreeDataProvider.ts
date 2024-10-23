@@ -1,7 +1,7 @@
 // src/TreeDataProvider.ts
 
 import * as vscode from 'vscode';
-import * as sqlite3 from 'sqlite3';
+import * as sqlite3 from 'vscode-sqlite3';
 
 export class DatabaseTreeDataProvider implements vscode.TreeDataProvider<TreeItem> {
   private _onDidChangeTreeData: vscode.EventEmitter<TreeItem | undefined | null | void> =
