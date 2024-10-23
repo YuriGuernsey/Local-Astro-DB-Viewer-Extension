@@ -3,7 +3,7 @@
   "displayName": "Local AstroDB Viewer",
   "description": "View and interact with .db files in VS Code",
   "version": "1.8.0",
-  "publisher": "YuriAlvesGuernsey",
+  "publisher": "Yurialvesguernsey",
   "icon": "media/logo.png",
   "repository": {
     "type": "git",
@@ -19,7 +19,7 @@
     "properties": {
       "localastrodb.databasePath": {
         "type": "string",
-        "default": "",
+        "default": "/workspaces/codingsnippetshare/.astro/content.db",
         "description": "The absolute path to the database file to open automatically."
       }
     }

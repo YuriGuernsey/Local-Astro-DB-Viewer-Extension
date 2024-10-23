@@ -24,14 +24,17 @@ export async function activate(context: vscode.ExtensionContext) {
   const config = vscode.workspace.getConfiguration('localastrodb');
   const databasePath = config.get<string>('databasePath');
 
-  if (databasePath) {
+  if (databasePath && fs.existsSync(databasePath)) {
     await openDatabaseAtPath(databasePath);
   }
 }
 
 async function initSqlJsModule() {
   if (!SQL) {
-    SQL = await initSqlJs();
+    SQL = await initSqlJs({
+      // Optional: Specify the location of the sql-wasm.wasm file if needed
+      // locateFile: (file) => `path/to/${file}`
+    });
   }
 }
 
@@ -132,7 +135,7 @@ function getQueryEditorContent(cspSource: string): string {
       body { font-family: sans-serif; margin: 0; padding: 0; }
       #editor { width: 100%; height: calc(100vh - 50px); }
       button { width: 100%; height: 50px; font-size: 16px; }
-      #result { padding: 10px; }
+      #result { padding: 10px; overflow: auto; max-height: 300px; }
     </style>
   </head>
   <body>
@@ -162,7 +165,8 @@ function getQueryEditorContent(cspSource: string): string {
       window.addEventListener('message', event => {
         const message = event.data;
         if (message.command === 'queryResult') {
-          document.getElementById('result').innerHTML = '<pre>' + JSON.stringify(message.data, null, 2) + '</pre>';
+          const formatted = JSON.stringify(message.data, null, 2);
+          document.getElementById('result').innerHTML = '<pre>' + formatted + '</pre>';
         } else if (message.command === 'queryError') {
           document.getElementById('result').innerHTML = '<pre style="color: red;">' + message.error + '</pre>';
         }
@@ -278,7 +282,7 @@ function getTableViewContent(rows: any[], cspSource: string, tableName: string):
   <head>
     <meta charset="UTF-8">
     <title>Table View</title>
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${cspSource}; script-src ${cspSource} 'unsafe-inline'; style-src ${cspSource};">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${cspSource}; script-src 'unsafe-inline'; style-src ${cspSource};">
     <style>
       body { font-family: sans-serif; margin: 0; padding: 0; }
       table { width: 100%; border-collapse: collapse; }
@@ -300,7 +304,7 @@ function getTableViewContent(rows: any[], cspSource: string, tableName: string):
     <button onclick="saveChanges()">Save Changes</button>
     <script>
       const vscode = acquireVsCodeApi();
-      const columns = ${JSON.stringify(columns)};
+      const columns = ${JSON.stringify(Object.keys(rows[0]))};
       const tableName = ${JSON.stringify(tableName)};
 
       document.getElementById('refreshButton').addEventListener('click', () => {

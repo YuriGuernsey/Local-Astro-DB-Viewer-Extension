@@ -21,7 +21,7 @@ export class DatabaseTreeDataProvider implements vscode.TreeDataProvider<TreeIte
     }
     try {
       if (!element) {
-        // No parent, return tables
+        // Root level: List all tables
         const tablesResult = this.db.exec("SELECT name FROM sqlite_master WHERE type='table'");
         if (tablesResult.length === 0) {
           return [];
@@ -35,7 +35,7 @@ export class DatabaseTreeDataProvider implements vscode.TreeDataProvider<TreeIte
           );
         });
       } else if (element.contextValue === 'table') {
-        // Return columns for the table
+        // Child level: List all columns in the table
         const columnsResult = this.db.exec(`PRAGMA table_info(${element.label})`);
         if (columnsResult.length === 0) {
           return [];
