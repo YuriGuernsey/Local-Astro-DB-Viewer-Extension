@@ -67,6 +67,11 @@ No additional settings required.
 - Added refresh to table view 
 - In Tree View show data types
 
+
+### 1.5.0
+
+- Bug fixes
+
 ### Future development
 
 - Save changes to seed file 

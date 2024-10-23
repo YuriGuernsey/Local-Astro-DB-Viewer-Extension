@@ -5,6 +5,11 @@
   "version": "1.4.0",
   "publisher": "YuriAlvesGuernsey",
   "icon": "media/logo.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/YuriGuernsey/Local-Astro-DB-Viewer-Extension.git"
+  },
+  "license":"https://www.opensource.org/licenses/mit-license.php",
   "engines": {
     "vscode": "^1.70.0"
   },
@@ -19,24 +24,34 @@
       }
     }
   },
-  "activationEvents": [
-    "onCommand:localastrodb.openDatabase",
-    "onCommand:localastrodb.openQueryEditor"
-  ],
+"activationEvents": [
+  "onCommand:localastrodb.openDatabase",
+  "onCommand:localastrodb.openQueryEditor",
+  "onView:localastrodbTreeView"
+],
+
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
         "command": "localastrodb.openDatabase",
-        "title": "Local AstroDB: Open .db file"
+        "title": "Local AstroDB: Open .db file",
+        "category": "Local AstroDB"
+      },
+      {
+        "command": "localastrodb.openQueryEditor",
+        "title": "Local AstroDB: Open Query Editor",
+        "category": "Local AstroDB"
       },
       {
         "command": "localastrodb.refresh",
-        "title": "Local AstroDB: Refresh Tree View"
+        "title": "Local AstroDB: Refresh Tree View",
+        "category": "Local AstroDB"
       },
       {
         "command": "localastrodb.viewTableData",
-        "title": "Local AstroDB: View Table Data"
+        "title": "Local AstroDB: View Table Data",
+        "category": "Local AstroDB"
       }
     ],
     "viewsContainers": {
