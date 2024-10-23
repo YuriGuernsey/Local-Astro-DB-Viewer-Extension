@@ -2,14 +2,14 @@
   "name": "localastrodb",
   "displayName": "Local AstroDB Viewer",
   "description": "View and interact with .db files in VS Code",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "publisher": "YuriAlvesGuernsey",
   "icon": "media/logo.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/YuriGuernsey/Local-Astro-DB-Viewer-Extension.git"
   },
-  "license":"https://www.opensource.org/licenses/mit-license.php",
+  "license": "https://www.opensource.org/licenses/mit-license.php",
   "engines": {
     "vscode": "^1.70.0"
   },
@@ -24,12 +24,11 @@
       }
     }
   },
-"activationEvents": [
-  "onCommand:localastrodb.openDatabase",
-  "onCommand:localastrodb.openQueryEditor",
-  "onView:localastrodbTreeView"
-],
-
+  "activationEvents": [
+    "onCommand:localastrodb.openDatabase",
+    "onCommand:localastrodb.openQueryEditor",
+    "onView:localastrodbTreeView"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
