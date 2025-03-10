@@ -1,14 +1,14 @@
-// src/extension.ts
-
 import * as vscode from 'vscode';
 import initSqlJs, { SqlJsStatic, Database } from 'sql.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import { DatabaseTreeDataProvider } from './TreeDataProvider';
+import * as chokidar from 'chokidar'; // File watcher package
 
 let SQL: SqlJsStatic | null = null;
 let db: Database | null = null;
 let dbPath: string | null = null;
+let seedWatcher: chokidar.FSWatcher | null = null;
 
 export async function activate(context: vscode.ExtensionContext) {
   await initSqlJsModule();
@@ -17,16 +17,39 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('localastrodb.openDatabase', openDatabase),
     vscode.commands.registerCommand('localastrodb.openQueryEditor', openQueryEditor),
     vscode.commands.registerCommand('localastrodb.refresh', refreshTreeView),
-    vscode.commands.registerCommand('localastrodb.viewTableData', viewTableData)
+    vscode.commands.registerCommand('localastrodb.viewTableData', viewTableData),
+    vscode.commands.registerCommand('localastrodb.addRow', addRow),
+    // vscode.commands.registerCommand('localastrodb.deleteRow', deleteRow)
   );
 
-  // Automatically open database if path is configured
+  // Automatically open .astro/content.db if path is configured or found
   const config = vscode.workspace.getConfiguration('localastrodb');
   const databasePath = config.get<string>('databasePath');
+  const autoDetectedDbPath = await autoDetectContentDb();
 
-  if (databasePath && fs.existsSync(databasePath)) {
-    await openDatabaseAtPath(databasePath);
+  if (autoDetectedDbPath) {
+    await openDatabaseAtPath(autoDetectedDbPath); // Automatically open if detected
+  } else if (databasePath && fs.existsSync(databasePath)) {
+    await openDatabaseAtPath(databasePath); // Open if configured manually
   }
+
+  // Automatically watch the /db/seed.ts file for changes
+  watchSeedFile();
+}
+
+// Auto-detect `.astro/content.db` in the root directory
+async function autoDetectContentDb(): Promise<string | null> {
+  const rootPath = vscode.workspace.rootPath;
+  if (!rootPath) {
+    return null; // Exit if there's no workspace root
+  }
+
+  const contentDbPath = path.join(rootPath, '.astro', 'content.db');
+  if (fs.existsSync(contentDbPath)) {
+    return contentDbPath;
+  }
+
+  return null; // Return null initially if the file isn't found
 }
 
 async function initSqlJsModule() {
@@ -148,7 +171,7 @@ function getQueryEditorContent(cspSource: string): string {
       const vscode = acquireVsCodeApi();
       let editor;
 
-      require.config({ paths: { 'vs': 'https://unpkg.com/monaco-editor@0.34.1/min/vs' }});
+      require.config({ paths: { 'vs': 'https://unpkg.com/monaco-editor@0.34.1/min/vs' }}); 
       require(['vs/editor/editor.main'], function() {
         editor = monaco.editor.create(document.getElementById('editor'), {
           value: '-- Enter your SQL query here',
@@ -177,32 +200,6 @@ function getQueryEditorContent(cspSource: string): string {
   `;
 }
 
-function executeQuery(query: string): any[] {
-  if (!db) {
-    throw new Error('Database not initialized');
-  }
-  const results = db.exec(query);
-  if (results.length === 0) {
-    return [];
-  }
-  const result = results[0];
-  const columns = result.columns;
-  const values = result.values;
-  const rows = values.map((row: any[]) => {
-    const rowObj: any = {};
-    row.forEach((value, index) => {
-      rowObj[columns[index]] = value;
-    });
-    return rowObj;
-  });
-  return rows;
-}
-
-async function getTableData(tableName: string): Promise<any[]> {
-  const query = `SELECT * FROM ${tableName} LIMIT 100`;
-  const rows = executeQuery(query);
-  return rows;
-}
 
 async function viewTableData(tableName: string) {
   if (!db) {
@@ -348,6 +345,88 @@ async function updateDatabaseRows(tableName: string, data: any[]) {
   await saveDatabase();
 }
 
+
+function executeQuery(query: string): any[] {
+  if (!db) {
+    throw new Error('Database not initialized');
+  }
+  const results = db.exec(query);
+  if (results.length === 0) {
+    return [];
+  }
+  const result = results[0];
+  const columns = result.columns;
+  const values = result.values;
+  const rows = values.map((row: any[]) => {
+    const rowObj: any = {};
+    row.forEach((value, index) => {
+      rowObj[columns[index]] = value;
+    });
+    return rowObj;
+  });
+  return rows;
+}
+
+async function getTableData(tableName: string): Promise<any[]> {
+  const query = `SELECT * FROM ${tableName} LIMIT 100`;
+  const rows = executeQuery(query);
+  return rows;
+}
+
+async function addRow() {
+  if (!db) {
+    vscode.window.showErrorMessage('No database is currently open. Please open a database first.');
+    return;
+  }
+
+  const tableNames = db.exec("SELECT name FROM sqlite_master WHERE type='table'");
+
+  if (!tableNames || tableNames.length === 0) {
+    vscode.window.showErrorMessage('No tables found in the database.');
+    return;
+  }
+
+  const tableNamesList = tableNames[0].values.map((row) => row[0] as string);
+
+  const selectedTable = await vscode.window.showQuickPick(tableNamesList, {
+    placeHolder: 'Select a table to add a new row'
+  });
+
+  if (selectedTable) {
+    const columns = await getColumnsForTable(selectedTable);
+
+    // Prompt user to enter values for each column
+    const columnValues: any = {};
+    for (let column of columns) {
+      const value = await vscode.window.showInputBox({
+        prompt: `Enter value for ${column}`
+      });
+      columnValues[column] = value;
+    }
+
+    // Insert the row into the table
+    await insertRowIntoTable(selectedTable, columnValues);
+    vscode.window.showInformationMessage('Row added successfully!');
+    refreshTreeView();
+  }
+}
+
+async function getColumnsForTable(tableName: string): Promise<string[]> {
+  const columnsResult = db?.exec(`PRAGMA table_info(${tableName})`);
+  return columnsResult ? columnsResult[0].values.map((col) => col[1] as string) : [];
+}
+
+async function insertRowIntoTable(tableName: string, columnValues: any) {
+  const columns = Object.keys(columnValues);
+  const values = columns.map((col) => columnValues[col]);
+
+  const placeholders = columns.map(() => '?').join(', ');
+  const sql = `INSERT INTO ${tableName} (${columns.join(', ')}) VALUES (${placeholders})`;
+
+  db?.run(sql, values);
+  await saveDatabase();
+}
+
 async function saveDatabase() {
   if (db && dbPath) {
     const data = db.export();
@@ -356,4 +435,30 @@ async function saveDatabase() {
   }
 }
 
-export function deactivate() {}
+// Watch the /db/seed.ts file for changes
+function watchSeedFile() {
+  const seedFilePath = path.join(vscode.workspace.rootPath || '', 'db/seed.ts');
+  if (fs.existsSync(seedFilePath)) {
+    // Watch the seed file for changes using chokidar
+    seedWatcher = chokidar.watch(seedFilePath, { persistent: true });
+    
+    // @ts-ignore
+    seedWatcher.on('change', () => {
+      vscode.window.showInformationMessage('Seed file has been updated. Refreshing data...');
+      refreshTreeView();  // Refresh data when the seed file is modified
+    });
+    // @ts-ignore
+    seedWatcher.on('error', (error: Error) => {
+      vscode.window.showErrorMessage(`Error watching seed file: ${error.message}`);
+    });
+  } else {
+    vscode.window.showErrorMessage('Seed file not found at db/seed.ts');
+  }
+}
+
+export function deactivate() {
+  // Close the seed watcher if it was initialized
+  if (seedWatcher) {
+    seedWatcher.close();
+  }
+}

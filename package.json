@@ -2,7 +2,7 @@
   "name": "localastrodb",
   "displayName": "Local AstroDB Viewer",
   "description": "View and interact with .db files in VS Code",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "publisher": "Yurialvesguernsey",
   "icon": "media/logo.png",
   "repository": {
@@ -91,6 +91,7 @@
     "media/**/*"
   ],
   "dependencies": {
+    "chokidar": "^4.0.3",
     "sql.js": "^1.11.0"
   }
 }
