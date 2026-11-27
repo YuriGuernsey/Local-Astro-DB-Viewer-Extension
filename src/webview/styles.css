@@ -1468,16 +1468,18 @@ li.changed {
 /* ---------- narrow editors ---------- */
 
 @media (max-width: 640px) {
+  /* The sidebar is the only table chooser: keep it, just narrower. */
   .app {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: 140px minmax(0, 1fr);
   }
 
-  .sidebar {
+  .side-count,
+  .file-info .muted {
     display: none;
   }
 
-  .main {
-    grid-column: 1;
+  .sidebar-footer {
+    flex-wrap: wrap;
   }
 
   .topbar {
@@ -1488,11 +1490,18 @@ li.changed {
     display: none;
   }
 
+  .tab {
+    padding: 0 8px;
+  }
+
+  /* History moves below the results instead of disappearing. */
   .sql-view.with-history {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) minmax(120px, 30%);
   }
 
   .history {
-    display: none;
+    border-top: 1px solid var(--vscode-panel-border, var(--grid-line));
+    border-left: none;
   }
 }
