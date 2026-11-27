@@ -4,8 +4,6 @@ import { runCompare } from '../actions';
 import { cellKind, displayText, formatCount } from '../format';
 import { useStore } from '../store';
 
-const same = (a: CellValue, b: CellValue) => JSON.stringify(a) === JSON.stringify(b);
-
 function Cell({ v }: { v: CellValue }) {
   return <td class={`k-${cellKind(v)}`}>{displayText(v)}</td>;
 }
@@ -150,7 +148,8 @@ function TableSection({ t, open, onToggle, rowLimit, left, right }: { t: TableDi
                           <tr>
                             <td class="key">{r.key.map(displayText).join(', ')}</td>
                             {r.after.map((after, i) =>
-                              same(r.before[i], after) ? (
+                              // The engine compares stored values; previews of long values can look identical.
+                              !r.changed[i] ? (
                                 <Cell v={after} />
                               ) : (
                                 <td class="diff">

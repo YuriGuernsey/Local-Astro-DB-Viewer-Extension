@@ -24,7 +24,7 @@ export function ErView({ visible }: { visible: boolean }) {
   const [view, setView] = useState<View>({ x: 0, y: 0, k: 1 });
   const [hover, setHover] = useState<string | null>(null);
   const fitted = useRef(false);
-  const drag = useRef<{ x: number; y: number; vx: number; vy: number; moved: boolean } | null>(null);
+  const drag = useRef<{ x: number; y: number; vx: number; vy: number; moved: boolean; table: string | null } | null>(null);
 
   const fit = () => {
     const host = hostRef.current;
@@ -71,7 +71,9 @@ export function ErView({ visible }: { visible: boolean }) {
 
   const onPointerDown = (e: PointerEvent) => {
     if (e.button !== 0) return;
-    drag.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y, moved: false };
+    // Pointer capture retargets pointerup to the canvas, so remember the table now.
+    const table = (e.target as Element).closest('[data-table]')?.getAttribute('data-table') ?? null;
+    drag.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y, moved: false, table };
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   };
   const onPointerMove = (e: PointerEvent) => {
@@ -82,13 +84,10 @@ export function ErView({ visible }: { visible: boolean }) {
     if (Math.abs(dx) + Math.abs(dy) > 3) d.moved = true;
     if (d.moved) setView((v) => ({ ...v, x: d.vx + dx, y: d.vy + dy }));
   };
-  const onPointerUp = (e: PointerEvent) => {
+  const onPointerUp = () => {
     const d = drag.current;
     drag.current = null;
-    if (d && !d.moved) {
-      const table = (e.target as Element).closest('[data-table]')?.getAttribute('data-table');
-      if (table) selectTable(table, 'data');
-    }
+    if (d && !d.moved && d.table) selectTable(d.table, 'data');
   };
 
   const related = useMemo(() => {
