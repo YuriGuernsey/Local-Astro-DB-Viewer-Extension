@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { CellValue, ColumnInfo, InputValue, TableInfo } from '../../shared/protocol';
 import { Icon, Kbd, modKey } from '../components/common';
-import { editText, formatBytes, inputFromText, isComplete, looksLikeJson } from '../format';
+import { editText, formatBytes, inputFromText, isComplete, looksLikeJson, reformatJson } from '../format';
 import { reportError, request } from '../rpc';
 
 export type RowPanelTarget =
@@ -109,7 +109,8 @@ export function RowPanel({
     setError(null);
     try {
       if (insert) {
-        const values: Record<string, InputValue> = {};
+        // No prototype: a column named __proto__ must be a plain key.
+        const values: Record<string, InputValue> = Object.create(null);
         table.columns.forEach((c, i) => {
           const f = fields[i];
           if (!f.useDefault && !c.generated) values[c.name] = valueOf(f, c);
@@ -184,6 +185,7 @@ export function RowPanel({
         {fields &&
           table.columns.map((c, i) => {
             const f = fields[i];
+            if (!f) return null;
             const disabled = !canEdit || !!f.locked || f.isNull || (insert && f.useDefault);
             const json = !f.blob && !f.isNull && looksLikeJson(f.text);
             return (
@@ -252,10 +254,10 @@ export function RowPanel({
                     )}
                     {json && (
                       <>
-                        <button class="link" onClick={() => update(i, { text: JSON.stringify(JSON.parse(f.text), null, 2) })}>
+                        <button class="link" onClick={() => update(i, { text: reformatJson(f.text, true) })}>
                           Format JSON
                         </button>
-                        <button class="link" onClick={() => update(i, { text: JSON.stringify(JSON.parse(f.text)) })}>
+                        <button class="link" onClick={() => update(i, { text: reformatJson(f.text, false) })}>
                           Minify
                         </button>
                       </>

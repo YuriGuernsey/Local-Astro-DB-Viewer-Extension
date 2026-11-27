@@ -73,7 +73,8 @@ export function parseTsv(text: string): string[][] {
   let field = '';
   let i = 0;
   let quoted = false;
-  const t = text.replace(/\r\n?/g, '\n').replace(/\n$/, '');
+  // A trailing line break ends the last row; CR/LF inside quoted fields is kept as typed.
+  const t = text.replace(/\r?\n$/, '');
   while (i < t.length) {
     const c = t[i];
     if (quoted) {
@@ -98,7 +99,8 @@ export function parseTsv(text: string): string[][] {
       row.push(field);
       field = '';
       i++;
-    } else if (c === '\n') {
+    } else if (c === '\n' || c === '\r') {
+      if (c === '\r' && t[i + 1] === '\n') i++;
       row.push(field);
       rows.push(row);
       row = [];
@@ -138,6 +140,56 @@ export function looksLikeJson(text: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Re-indents (or minifies) JSON without parsing it, so numbers, escapes and key order are kept
+ * exactly as written (JSON.parse would round integers above 2^53).
+ */
+export function reformatJson(text: string, pretty: boolean): string {
+  const out: string[] = [];
+  let depth = 0;
+  let i = 0;
+  const n = text.length;
+  const nl = () => (pretty ? '\n' + '  '.repeat(depth) : '');
+  while (i < n) {
+    const c = text[i];
+    if (c === ' ' || c === '\t' || c === '\n' || c === '\r') {
+      i++;
+    } else if (c === '"') {
+      let j = i + 1;
+      while (j < n && text[j] !== '"') j += text[j] === '\\' ? 2 : 1;
+      out.push(text.slice(i, j + 1));
+      i = j + 1;
+    } else if (c === '{' || c === '[') {
+      let j = i + 1;
+      while (j < n && /\s/.test(text[j])) j++;
+      if (text[j] === (c === '{' ? '}' : ']')) {
+        out.push(c + text[j]);
+        i = j + 1;
+      } else {
+        depth++;
+        out.push(c + nl());
+        i++;
+      }
+    } else if (c === '}' || c === ']') {
+      depth--;
+      out.push(nl() + c);
+      i++;
+    } else if (c === ',') {
+      out.push(',' + nl());
+      i++;
+    } else if (c === ':') {
+      out.push(pretty ? ': ' : ':');
+      i++;
+    } else {
+      let j = i;
+      while (j < n && !/[\s,:[\]{}"]/.test(text[j])) j++;
+      out.push(text.slice(i, Math.max(j, i + 1)));
+      i = Math.max(j, i + 1);
+    }
+  }
+  return out.join('');
 }
 
 export function sameValue(a: CellValue, b: InputValue): boolean {
