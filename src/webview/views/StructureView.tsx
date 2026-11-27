@@ -12,6 +12,7 @@ import {
   type NewColumnDef,
 } from '../../shared/ddl';
 import type { TableInfo } from '../../shared/protocol';
+import { asciiLower, referenceableColumns } from '../../shared/sql';
 import { Icon, SqlBlock } from '../components/common';
 import { reportError, request } from '../rpc';
 import { currentTable, setState, useStore } from '../store';
@@ -47,7 +48,8 @@ export function StructureView() {
 
   const drop = async () => {
     if (!(await confirm(`Drop ${kind} "${table.name}"?`, isView ? 'You can undo this.' : 'All of its rows will be deleted. You can undo this.', 'Drop'))) return;
-    const inverse = isView && table.sql ? [table.sql] : undefined;
+    // Dropping a view also drops its INSTEAD OF triggers; undo recreates both.
+    const inverse = isView && table.sql ? [table.sql, ...table.triggers.map((t) => t.sql)] : undefined;
     await runDdl([dropObjectSql(isView ? 'view' : 'table', table.name)], `Drop ${kind} ${table.name}`, inverse);
   };
 
@@ -330,7 +332,7 @@ function FormShell({ preview, error, submit, onSubmit, onCancel, children }: {
 
 function AddColumnForm({ table, onDone }: { table: TableInfo; onDone(): void }) {
   const [col, setCol] = useState<NewColumnDef>(emptyColumn('', 'TEXT'));
-  const exists = table.columns.some((c) => c.name.toLowerCase() === col.name.trim().toLowerCase());
+  const exists = table.columns.some((c) => asciiLower(c.name) === asciiLower(col.name.trim()));
   const error = !col.name.trim() ? 'Enter a column name.' : exists ? 'A column with this name exists.' : col.notNull && !col.defaultValue.trim() ? 'NOT NULL columns need a default.' : null;
   const sql = addColumnSql(table.name, { ...col, name: col.name.trim() || 'new_column' });
   const submit = async () => {
@@ -370,6 +372,8 @@ export function TypeInput({ value, onChange }: { value: string; onChange(v: stri
 export function ReferencesInput({ value, onChange }: { value: NewColumnDef['references']; onChange(v: NewColumnDef['references']): void }) {
   const tables = useStore((s) => s.schema.tables.filter((t) => t.type === 'table'));
   const target = tables.find((t) => t.name === value?.table);
+  // Only a single-column primary key or UNIQUE column can be the parent of a one-column foreign key.
+  const keys = target ? referenceableColumns(target) : [];
   return (
     <span class="row-gap">
       <select
@@ -379,18 +383,23 @@ export function ReferencesInput({ value, onChange }: { value: NewColumnDef['refe
         onChange={(e) => {
           const name = (e.target as HTMLSelectElement).value;
           const t = tables.find((x) => x.name === name);
-          onChange(name ? { table: name, column: t?.pk[0] ?? t?.columns[0]?.name ?? '' } : null);
+          onChange(name && t ? { table: name, column: referenceableColumns(t)[0] ?? '' } : null);
         }}
       >
         <option value="">No reference</option>
-        {tables.map((t) => (
-          <option value={t.name}>→ {t.name}</option>
-        ))}
+        {tables.map((t) => {
+          const usable = referenceableColumns(t).length > 0;
+          return (
+            <option value={t.name} disabled={!usable} title={usable ? undefined : 'No single-column primary key or UNIQUE column'}>
+              → {t.name}
+            </option>
+          );
+        })}
       </select>
       {target && (
         <select class="input" aria-label="References column" value={value?.column} onChange={(e) => onChange({ table: target.name, column: (e.target as HTMLSelectElement).value })}>
-          {target.columns.map((c) => (
-            <option value={c.name}>{c.name}</option>
+          {keys.map((c) => (
+            <option value={c}>{c}</option>
           ))}
         </select>
       )}
@@ -404,8 +413,8 @@ function AddIndexForm({ table, onDone }: { table: TableInfo; onDone(): void }) {
   const [name, setName] = useState('');
   const [nameEdited, setNameEdited] = useState(false);
   const indexName = nameEdited ? name : defaultIndexName(table.name, cols);
-  const allNames = useStore((s) => s.schema.tables.flatMap((t) => t.indexes.map((i) => i.name.toLowerCase())));
-  const error = cols.length === 0 ? 'Pick at least one column.' : !indexName.trim() ? 'Enter an index name.' : allNames.includes(indexName.toLowerCase()) ? 'An index with this name exists.' : null;
+  const allNames = useStore((s) => s.schema.tables.flatMap((t) => t.indexes.map((i) => asciiLower(i.name))));
+  const error = cols.length === 0 ? 'Pick at least one column.' : !indexName.trim() ? 'Enter an index name.' : allNames.includes(asciiLower(indexName)) ? 'An index with this name exists.' : null;
   const sql = createIndexSql(indexName, table.name, cols.length ? cols : ['…'], unique);
   const toggle = (c: string) => setCols((cur) => (cur.includes(c) ? cur.filter((x) => x !== c) : [...cur, c]));
   const submit = async () => {
@@ -443,9 +452,9 @@ function AddIndexForm({ table, onDone }: { table: TableInfo; onDone(): void }) {
 
 function RenameTableForm({ table, onDone }: { table: TableInfo; onDone(): void }) {
   const [name, setName] = useState(table.name);
-  const names = useStore((s) => s.schema.tables.map((t) => t.name.toLowerCase()));
+  const names = useStore((s) => s.schema.tables.map((t) => asciiLower(t.name)));
   const trimmed = name.trim();
-  const error = !trimmed ? 'Enter a name.' : trimmed === table.name ? 'Enter a different name.' : names.includes(trimmed.toLowerCase()) && trimmed.toLowerCase() !== table.name.toLowerCase() ? 'That name is taken.' : null;
+  const error = !trimmed ? 'Enter a name.' : trimmed === table.name ? 'Enter a different name.' : names.includes(asciiLower(trimmed)) && asciiLower(trimmed) !== asciiLower(table.name) ? 'That name is taken.' : null;
   const sql = renameTableSql(table.name, trimmed || table.name);
   const submit = async () => {
     if (error) return;
@@ -462,7 +471,8 @@ function RenameTableForm({ table, onDone }: { table: TableInfo; onDone(): void }
         autoFocus
         value={name}
         onInput={(e) => setName((e.target as HTMLInputElement).value)}
-        onKeyDown={(e) => e.key === 'Enter' && void submit()}
+        // Ctrl/Cmd+Enter is handled by the form; plain Enter submits here (not both).
+        onKeyDown={(e) => e.key === 'Enter' && !e.metaKey && !e.ctrlKey && void submit()}
       />
     </FormShell>
   );

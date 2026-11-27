@@ -1,5 +1,5 @@
-import { useState } from 'preact/hooks';
-import { createTableSql, dropObjectSql, emptyColumn, validateTableDef, type NewColumnDef, type NewTableDef } from '../../shared/ddl';
+import { useEffect, useRef, useState } from 'preact/hooks';
+import { createTableSql, dropObjectSql, emptyColumn, normalizeTableDef, validateTableDef, type NewColumnDef, type NewTableDef } from '../../shared/ddl';
 import { SqlBlock } from '../components/common';
 import { reportError, request } from '../rpc';
 import { setState, useStore } from '../store';
@@ -14,8 +14,12 @@ export function NewTableView() {
     strict: false,
   });
   const [busy, setBusy] = useState(false);
-  const error = validateTableDef(def, existing);
-  const sql = createTableSql({ ...def, name: def.name.trim() || 'new_table', columns: def.columns.map((c) => ({ ...c, name: c.name.trim() || '…' })) });
+  const mounted = useRef(true);
+  useEffect(() => () => void (mounted.current = false), []);
+  // One normalized definition for validation, preview and the submitted SQL.
+  const norm = normalizeTableDef(def);
+  const error = validateTableDef(norm, existing);
+  const sql = createTableSql({ ...norm, name: norm.name || 'new_table', columns: norm.columns.map((c) => ({ ...c, name: c.name || '…' })) });
 
   const setColumn = (i: number, patch: Partial<NewColumnDef>) =>
     setDef((d) => ({ ...d, columns: d.columns.map((c, j) => (j === i ? { ...c, ...patch } : c)) }));
@@ -31,14 +35,15 @@ export function NewTableView() {
   const create = async () => {
     if (error || busy) return;
     setBusy(true);
-    const name = def.name.trim();
+    const name = norm.name;
     try {
-      await request('runDdl', { statements: [createTableSql({ ...def, name })], label: `Create table ${name}`, inverse: [dropObjectSql('table', name)] });
-      setState({ newTable: false, table: name, tab: 'structure' });
+      await request('runDdl', { statements: [createTableSql(norm)], label: `Create table ${name}`, inverse: [dropObjectSql('table', name)] });
+      // If this form was closed meanwhile (maybe for another one), leave the current view alone.
+      if (mounted.current) setState({ newTable: false, table: name, tab: 'structure' });
     } catch (err) {
       reportError(err, 'Create table');
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   };
 
@@ -87,7 +92,7 @@ export function NewTableView() {
                   <input class="input" aria-label={`Column ${i + 1} name`} value={c.name} onInput={(e) => setColumn(i, { name: (e.target as HTMLInputElement).value })} />
                 </td>
                 <td>
-                  <TypeInput value={c.type} onChange={(type) => setColumn(i, { type })} />
+                  <TypeInput value={c.type} onChange={(type) => setColumn(i, { type, autoincrement: c.autoincrement && /^integer$/i.test(type.trim()) })} />
                 </td>
                 <td>
                   <input type="checkbox" aria-label="Primary key" checked={c.pk} onChange={(e) => setColumn(i, { pk: (e.target as HTMLInputElement).checked, autoincrement: false })} />

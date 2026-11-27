@@ -1,5 +1,5 @@
 // Builders for the schema-editing statements, shared by the Structure view (live preview) and tests.
-import { quoteIdent as q, quoteString, tokenize } from './sql';
+import { asciiLower, quoteIdent as q, quoteString, tokenize } from './sql';
 
 export interface NewColumnDef {
   name: string;
@@ -66,20 +66,30 @@ export function createTableSql(def: NewTableDef): string {
   return `CREATE TABLE ${q(def.name)} (\n  ${lines.join(',\n  ')}\n)${options.length ? ' ' + options.join(', ') : ''}`;
 }
 
+/** Trims names and types, so validation, preview and the submitted SQL all see the same definition. */
+export function normalizeTableDef(def: NewTableDef): NewTableDef {
+  return {
+    ...def,
+    name: def.name.trim(),
+    columns: def.columns.map((c) => ({ ...c, name: c.name.trim(), type: c.type.trim(), defaultValue: c.defaultValue.trim() })),
+  };
+}
+
 export function validateTableDef(def: NewTableDef, existing: string[]): string | null {
   if (!def.name.trim()) return 'Enter a table name.';
-  if (existing.some((n) => n.toLowerCase() === def.name.trim().toLowerCase())) return `"${def.name}" already exists.`;
+  if (existing.some((n) => asciiLower(n) === asciiLower(def.name.trim()))) return `"${def.name.trim()}" already exists.`;
   if (def.columns.length === 0) return 'Add at least one column.';
   const seen = new Set<string>();
   for (const c of def.columns) {
     if (!c.name.trim()) return 'Every column needs a name.';
-    const key = c.name.trim().toLowerCase();
+    const key = asciiLower(c.name.trim());
     if (seen.has(key)) return `Duplicate column "${c.name}".`;
     seen.add(key);
     if (c.autoincrement && !(c.pk && /^integer$/i.test(c.type.trim()))) return 'AUTOINCREMENT needs a single INTEGER PRIMARY KEY.';
   }
   const pk = def.columns.filter((c) => c.pk);
   if (def.withoutRowid && pk.length === 0) return 'WITHOUT ROWID tables need a primary key.';
+  if (def.withoutRowid && def.columns.some((c) => c.autoincrement)) return 'AUTOINCREMENT is not allowed in WITHOUT ROWID tables: clear Auto or WITHOUT ROWID.';
   if (pk.some((c) => c.autoincrement) && pk.length > 1) return 'AUTOINCREMENT needs a single INTEGER PRIMARY KEY.';
   if (def.strict && def.columns.some((c) => !STRICT_TYPES.includes(c.type.trim().toUpperCase()))) {
     return 'STRICT tables only allow INT, INTEGER, REAL, TEXT, BLOB and ANY.';

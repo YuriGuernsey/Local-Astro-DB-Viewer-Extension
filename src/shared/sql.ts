@@ -1,9 +1,22 @@
 // SQL helpers shared by the worker and the webview: quoting, tokenizing,
 // statement splitting and read-only classification.
-import type { Affinity } from './protocol';
+import type { Affinity, TableInfo } from './protocol';
 
 export function quoteIdent(name: string): string {
   return '"' + name.replace(/"/g, '""') + '"';
+}
+
+/** Lower-cases A-Z only: SQLite compares identifiers case-insensitively for ASCII letters alone. */
+export function asciiLower(name: string): string {
+  return name.replace(/[A-Z]/g, (c) => c.toLowerCase());
+}
+
+/** Columns another table can reference on their own: a single-column primary key or UNIQUE index. */
+export function referenceableColumns(t: TableInfo): string[] {
+  const out = new Set<string>();
+  if (t.pk.length === 1) out.add(t.pk[0]);
+  for (const i of t.indexes) if (i.unique && !i.partial && i.columns.length === 1 && t.columns.some((c) => c.name === i.columns[0])) out.add(i.columns[0]);
+  return t.columns.map((c) => c.name).filter((c) => out.has(c));
 }
 
 export function quoteString(text: string): string {

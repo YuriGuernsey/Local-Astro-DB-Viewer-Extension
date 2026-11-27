@@ -1,6 +1,6 @@
 // Reads the schema of a database: tables, views, columns, keys, indexes and triggers.
 import type { ColumnInfo, ForeignKeyInfo, IndexInfo, ObjectType, SchemaInfo, TableInfo, TriggerInfo } from '../shared/protocol';
-import { affinityOf, quoteIdent } from '../shared/sql';
+import { affinityOf, asciiLower, quoteIdent } from '../shared/sql';
 import { all, num, type Database } from './db';
 
 const str = (v: unknown) => (v === null || v === undefined ? '' : String(v));
@@ -153,7 +153,7 @@ function readIndexes(db: Database, table: string, indexSql: Map<string, string |
 }
 
 export function findTable(schema: SchemaInfo, name: string): TableInfo | undefined {
-  return schema.tables.find((t) => t.name === name) ?? schema.tables.find((t) => t.name.toLowerCase() === name.toLowerCase());
+  return schema.tables.find((t) => t.name === name) ?? schema.tables.find((t) => asciiLower(t.name) === asciiLower(name));
 }
 
 /** Columns that can be written (not generated). */

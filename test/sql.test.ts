@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+  normalizeTableDef,
   addColumnSql,
   createIndexSql,
   createTableSql,
@@ -9,7 +10,8 @@ import {
   formatDefault,
   validateTableDef,
 } from '../src/shared/ddl';
-import { affinityOf, isReadOnlyStatement, splitStatements, statementAt } from '../src/shared/sql';
+import { affinityOf, isReadOnlyStatement, referenceableColumns, splitStatements, statementAt } from '../src/shared/sql';
+import type { TableInfo } from '../src/shared/protocol';
 import { filterCondition } from '../src/engine/filters';
 
 describe('splitStatements', () => {
@@ -122,6 +124,30 @@ describe('ddl', () => {
     assert.equal(validateTableDef({ name: '', columns: [], withoutRowid: false, strict: false }, []), 'Enter a table name.');
     assert.match(validateTableDef({ name: 'Tracks', columns: [emptyColumn('a')], withoutRowid: false, strict: false }, ['tracks'])!, /already exists/);
     assert.equal(validateTableDef({ name: 'x', columns: [emptyColumn('a')], withoutRowid: false, strict: false }, []), null);
+  });
+
+  it('rejects AUTOINCREMENT with WITHOUT ROWID', () => {
+    const id = { ...emptyColumn('id', 'INTEGER'), pk: true, autoincrement: true };
+    assert.match(validateTableDef({ name: 't', columns: [id], withoutRowid: true, strict: false }, [])!, /WITHOUT ROWID/);
+  });
+
+  it('compares identifiers with ASCII-only case folding, like SQLite', () => {
+    assert.equal(validateTableDef({ name: 'ärger', columns: [emptyColumn('a')], withoutRowid: false, strict: false }, ['Ärger']), null);
+    assert.match(validateTableDef({ name: 'TRACKS', columns: [emptyColumn('a')], withoutRowid: false, strict: false }, ['tracks'])!, /already exists/);
+    assert.equal(validateTableDef({ name: 't', columns: [emptyColumn('É'), emptyColumn('é')], withoutRowid: false, strict: false }, []), null);
+  });
+
+  it('normalizes names before building SQL', () => {
+    const def = normalizeTableDef({ name: ' t ', columns: [emptyColumn(' code ', ' TEXT ')], withoutRowid: false, strict: false });
+    assert.equal(createTableSql(def), 'CREATE TABLE "t" (\n  "code" TEXT\n)');
+  });
+
+  it('offers only single-column keys as foreign key targets', () => {
+    const t = (pk: string[], indexes: TableInfo['indexes'] = []) =>
+      ({ columns: ['a', 'b', 'c'].map((name) => ({ name })), pk, indexes }) as unknown as TableInfo;
+    assert.deepEqual(referenceableColumns(t(['a', 'b'])), []);
+    assert.deepEqual(referenceableColumns(t(['a'])), ['a']);
+    assert.deepEqual(referenceableColumns(t(['a', 'b'], [{ name: 'u', unique: true, origin: 'u', partial: false, columns: ['c'], sql: null }])), ['c']);
   });
 
   it('formats defaults', () => {
