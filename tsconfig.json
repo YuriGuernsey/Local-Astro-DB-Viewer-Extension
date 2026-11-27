@@ -1,15 +1,22 @@
 {
-	"compilerOptions": {
-	  "module": "commonjs",
-	  "target": "ES2020",
-	  "outDir": "out",
-	  "rootDir": "src",
-	  "lib": ["ES2020", "dom"],
-	  "sourceMap": true,
-	  "strict": true,
-	  "esModuleInterop": true,
-	  "skipLibCheck": true
-	},
-	"exclude": ["node_modules", ".vscode-test"]
-  }
-  
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node", "vscode"],
+    "jsx": "react-jsx",
+    "jsxImportSource": "preact",
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src", "test"]
+}

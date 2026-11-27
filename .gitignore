@@ -1,5 +1,8 @@
 out
+out-test
+out-harness
 dist
 node_modules
 .vscode-test/
 *.vsix
+.DS_Store
