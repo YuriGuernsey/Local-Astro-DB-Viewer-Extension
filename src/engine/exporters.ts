@@ -97,14 +97,14 @@ export function dumpDatabase(db: Database, schema: SchemaInfo): string[] {
   const w = new ChunkWriter();
   w.write('-- Local AstroDB dump\nPRAGMA foreign_keys=OFF;\nBEGIN TRANSACTION;\n');
   const byName = new Map(schema.tables.map((t) => [t.name, t]));
-  const objects = db.exec("SELECT type, name, sql FROM sqlite_schema WHERE sql IS NOT NULL ORDER BY rowid")[0]?.values ?? [];
+  const objects = db.exec('SELECT type, name, sql FROM main.sqlite_schema WHERE sql IS NOT NULL ORDER BY rowid')[0]?.values ?? [];
   const later: string[] = [];
   let hasSequence = false;
 
   const writeRows = (table: string, columns: string[]) => {
     if (columns.length === 0) return;
     const names = columns.map(q).join(', ');
-    const stmt = db.prepare(`SELECT ${names} FROM ${q(table)}`);
+    const stmt = db.prepare(`SELECT ${names} FROM main.${q(table)}`);
     try {
       while (stmt.step()) w.write(`INSERT INTO ${q(table)} (${names}) VALUES (${rowOf(stmt).map(sqlLiteral).join(', ')});\n`);
     } finally {

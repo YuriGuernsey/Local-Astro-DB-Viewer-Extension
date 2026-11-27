@@ -64,6 +64,9 @@ interface StoredResult {
   order: number[] | null;
 }
 
+/** Structured reads and edits always target the main schema, never a TEMP table of the same name. */
+const main = (name: string) => 'main.' + q(name);
+
 /** Rows sent along with a result set, so small results need no extra request. */
 const FIRST_PAGE = 200;
 /** Upper bound for copy/select-all operations. */
@@ -112,8 +115,15 @@ export class DbSession {
     }
   }
 
+  private foreignKeysOn(): boolean {
+    return num(scalar(this.db, 'PRAGMA foreign_keys')) === 1;
+  }
+
   private replace(bytes: Uint8Array): void {
+    const fk = this.foreignKeysOn();
     const next = this.open(bytes);
+    // A new connection starts with foreign_keys off; keep what the user enabled.
+    if (fk) next.run('PRAGMA foreign_keys = ON');
     this.db.close();
     this.db = next;
     this.schemaCache = null;
@@ -180,7 +190,7 @@ export class DbSession {
     const out: Record<string, number | null> = {};
     for (const t of this.schema().tables) {
       try {
-        out[t.name] = num(scalar(this.db, `SELECT count(*) FROM ${q(t.name)}`));
+        out[t.name] = num(scalar(this.db, `SELECT count(*) FROM ${main(t.name)}`));
       } catch {
         out[t.name] = null;
       }
@@ -191,7 +201,7 @@ export class DbSession {
   count(query: RowsQuery): number {
     const t = this.table(query.table);
     const where = buildWhere(t, query.filters, query.search);
-    return num(scalar(this.db, `SELECT count(*) FROM ${q(t.name)}${where.sql ? ' WHERE ' + where.sql : ''}`, where.params));
+    return num(scalar(this.db, `SELECT count(*) FROM ${main(t.name)}${where.sql ? ' WHERE ' + where.sql : ''}`, where.params));
   }
 
   rows(query: RowsQuery & { offset: number; limit: number }): GridRow[] {
@@ -202,7 +212,7 @@ export class DbSession {
     const where = buildWhere(t, query.filters, query.search);
     const keys = keyColumns(t);
     const cols = [...keys.map(q), selectList(t)].join(', ');
-    const sql = `SELECT ${cols} FROM ${q(t.name)}${where.sql ? ' WHERE ' + where.sql : ''}${orderBy(t, query.sort)} LIMIT ? OFFSET ?`;
+    const sql = `SELECT ${cols} FROM ${main(t.name)}${where.sql ? ' WHERE ' + where.sql : ''}${orderBy(t, query.sort)} LIMIT ? OFFSET ?`;
     return all(this.db, sql, [...where.params, limit, offset]).map((r) => ({
       k: keys.length ? r.slice(0, keys.length).map((v) => encodeCell(v, 'full')) : null,
       v: r.slice(keys.length).map((v) => encodeCell(v, mode)),
@@ -223,7 +233,7 @@ export class DbSession {
   getRow(table: string, key: CellValue[]): CellValue[] | null {
     const t = this.table(table);
     const w = this.keyWhere(t, key.map(decodeCell));
-    const r = one(this.db, `SELECT ${selectList(t)} FROM ${q(t.name)} WHERE ${w.sql}`, w.params);
+    const r = one(this.db, `SELECT ${selectList(t)} FROM ${main(t.name)} WHERE ${w.sql}`, w.params);
     return r ? r.map((v) => encodeCell(v, 'full')) : null;
   }
 
@@ -237,7 +247,7 @@ export class DbSession {
     const order = orderBy(t, query.sort).trim();
     const sql =
       `SELECT rn FROM (SELECT ${keys.map((c, i) => `${q(c)} AS k${i}`).join(', ')}, row_number() OVER (${order}) - 1 AS rn ` +
-      `FROM ${q(t.name)}${where.sql ? ' WHERE ' + where.sql : ''}) WHERE ${keys.map((_, i) => `k${i} = ${placeholder(k[i])}`).join(' AND ')}`;
+      `FROM ${main(t.name)}${where.sql ? ' WHERE ' + where.sql : ''}) WHERE ${keys.map((_, i) => `k${i} = ${placeholder(k[i])}`).join(' AND ')}`;
     const r = one(this.db, sql, [...where.params, ...k]);
     return r ? num(r[0]) : -1;
   }
@@ -310,6 +320,15 @@ export class DbSession {
     return { edit: this.snapshotEdit(label, schema, before, apply), schemaChanged: schema };
   }
 
+  /** Edits with side effects on other rows (triggers, enabled foreign-key actions) are undone from a snapshot. */
+  private needsSnapshot(t: TableInfo): boolean {
+    if (t.triggers.length) return true;
+    if (!this.foreignKeysOn()) return false;
+    const name = t.name.toLowerCase();
+    const acts = (a: string) => /^(CASCADE|SET NULL|SET DEFAULT)$/i.test(a);
+    return this.schema().tables.some((o) => o.foreignKeys.some((f) => f.table.toLowerCase() === name && (acts(f.onDelete) || acts(f.onUpdate))));
+  }
+
   private inverseEdit(label: string, schema: boolean, undo: () => void, redo: () => void): EditInfo {
     return this.register({
       label,
@@ -362,14 +381,14 @@ export class DbSession {
 
   private insertFull(t: TableInfo, names: string[], values: RawValue[]): void {
     this.db.run(
-      `INSERT INTO ${q(t.name)} (${names.map(q).join(', ')}) VALUES (${values.map(placeholder).join(', ')})`,
+      `INSERT OR ABORT INTO ${main(t.name)} (${names.map(q).join(', ')}) VALUES (${values.map(placeholder).join(', ')})`,
       values.map((v) => (typeof v === 'bigint' ? v.toString() : v)),
     );
   }
 
   private deleteByKey(t: TableInfo, key: RawValue[]): void {
     const w = this.keyWhere(t, key);
-    const stmt = this.db.prepare(`DELETE FROM ${q(t.name)} WHERE ${w.sql}`);
+    const stmt = this.db.prepare(`DELETE FROM ${main(t.name)} WHERE ${w.sql}`);
     try {
       stmt.bind(w.params.map((v) => (typeof v === 'bigint' ? v.toString() : v)));
       stmt.step();
@@ -397,7 +416,7 @@ export class DbSession {
     const returning = keys.map(q).join(', ');
     const set = (col: ColumnInfo, key: RawValue[], value: RawValue): RawValue[] => {
       const w = this.keyWhere(t, key);
-      const r = one(this.db, `UPDATE ${q(t.name)} SET ${q(col.name)} = ${placeholder(value)} WHERE ${w.sql} RETURNING ${returning}`, [
+      const r = one(this.db, `UPDATE OR ABORT ${main(t.name)} SET ${q(col.name)} = ${placeholder(value)} WHERE ${w.sql} RETURNING ${returning}`, [
         value,
         ...w.params,
       ]);
@@ -418,7 +437,7 @@ export class DbSession {
     const backward = () => {
       for (const op of [...ops].reverse()) set(op.col, op.newKey, op.old);
     };
-    if (t.triggers.length) return this.snapshotMutation(label, false, () => forward(true));
+    if (this.needsSnapshot(t)) return this.snapshotMutation(label, false, () => forward(true));
     transaction(this.db, () => forward(true));
     return { edit: this.inverseEdit(label, false, backward, () => forward(false)), schemaChanged: false };
   }
@@ -433,8 +452,8 @@ export class DbSession {
     const keys = keyColumns(t);
     const full = this.fullRowColumns(t);
     const insert = cols.length
-      ? `INSERT INTO ${q(t.name)} (${cols.map((c) => q(c.col.name)).join(', ')}) VALUES (${cols.map((c) => placeholder(c.value)).join(', ')})`
-      : `INSERT INTO ${q(t.name)} DEFAULT VALUES`;
+      ? `INSERT OR ABORT INTO ${main(t.name)} (${cols.map((c) => q(c.col.name)).join(', ')}) VALUES (${cols.map((c) => placeholder(c.value)).join(', ')})`
+      : `INSERT OR ABORT INTO ${main(t.name)} DEFAULT VALUES`;
     let key: RawValue[] = [];
     let row: RawValue[] = [];
     const first = () => {
@@ -445,7 +464,7 @@ export class DbSession {
     };
     const label = `Insert row into ${t.name}`;
     let result: MutationResult;
-    if (t.triggers.length) result = this.snapshotMutation(label, false, first);
+    if (this.needsSnapshot(t)) result = this.snapshotMutation(label, false, first);
     else {
       transaction(this.db, first);
       result = {
@@ -471,12 +490,12 @@ export class DbSession {
       rows = [];
       for (const k of decoded) {
         const w = this.keyWhere(t, k);
-        const r = one(this.db, `DELETE FROM ${q(t.name)} WHERE ${w.sql} RETURNING ${full.map(q).join(', ')}`, w.params);
+        const r = one(this.db, `DELETE FROM ${main(t.name)} WHERE ${w.sql} RETURNING ${full.map(q).join(', ')}`, w.params);
         if (r) rows.push(r);
       }
     };
     const label = decoded.length === 1 ? `Delete row from ${t.name}` : `Delete ${decoded.length} rows from ${t.name}`;
-    if (t.triggers.length) return this.snapshotMutation(label, false, first);
+    if (this.needsSnapshot(t)) return this.snapshotMutation(label, false, first);
     transaction(this.db, first);
     if (rows.length === 0) return { edit: null, schemaChanged: false };
     const deleted = rows;
@@ -653,7 +672,7 @@ export class DbSession {
     const t = this.table(source.table);
     const query: RowsQuery = source.query ?? { table: t.name, filters: {}, search: '', sort: null };
     const where = buildWhere(t, query.filters, query.search);
-    const sql = `SELECT ${selectList(t)} FROM ${q(t.name)}${where.sql ? ' WHERE ' + where.sql : ''}${orderBy(t, query.sort)}`;
+    const sql = `SELECT ${selectList(t)} FROM ${main(t.name)}${where.sql ? ' WHERE ' + where.sql : ''}${orderBy(t, query.sort)}`;
     const db = this.db;
     return {
       name: t.name,

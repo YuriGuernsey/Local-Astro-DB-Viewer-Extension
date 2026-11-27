@@ -7,7 +7,7 @@ const str = (v: unknown) => (v === null || v === undefined ? '' : String(v));
 
 export function readSchema(db: Database): SchemaInfo {
   const list = all(db, "SELECT name, type, wr, strict FROM pragma_table_list WHERE schema = 'main'");
-  const sqlRows = all(db, "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE type IN ('table','view','trigger','index')");
+  const sqlRows = all(db, "SELECT type, name, tbl_name, sql FROM main.sqlite_schema WHERE type IN ('table','view','trigger','index')");
   const sqlByName = new Map<string, string | null>();
   const triggersByTable = new Map<string, TriggerInfo[]>();
   const indexSql = new Map<string, string | null>();
@@ -60,7 +60,7 @@ function readTable(
     readOnly: false,
   };
   try {
-    const cols = all(db, 'SELECT cid, name, type, "notnull", dflt_value, pk, hidden FROM pragma_table_xinfo(?)', [name]);
+    const cols = all(db, `SELECT cid, name, type, "notnull", dflt_value, pk, hidden FROM pragma_table_xinfo(?, 'main')`, [name]);
     for (const [cid, cname, ctype, notnull, dflt, pk, hidden] of cols) {
       const h = num(hidden);
       if (h === 1) continue; // hidden virtual-table column
@@ -119,7 +119,7 @@ function readTable(
 }
 
 function readForeignKeys(db: Database, table: string): ForeignKeyInfo[] {
-  const rows = all(db, 'SELECT id, seq, "table", "from", "to", on_update, on_delete FROM pragma_foreign_key_list(?) ORDER BY id, seq', [table]);
+  const rows = all(db, `SELECT id, seq, "table", "from", "to", on_update, on_delete FROM pragma_foreign_key_list(?, 'main') ORDER BY id, seq`, [table]);
   const byId = new Map<number, ForeignKeyInfo>();
   for (const [id, , parent, from, to, onUpdate, onDelete] of rows) {
     const key = num(id);
@@ -135,10 +135,10 @@ function readForeignKeys(db: Database, table: string): ForeignKeyInfo[] {
 }
 
 function readIndexes(db: Database, table: string, indexSql: Map<string, string | null>): IndexInfo[] {
-  const rows = all(db, 'SELECT name, "unique", origin, partial FROM pragma_index_list(?)', [table]);
+  const rows = all(db, `SELECT name, "unique", origin, partial FROM pragma_index_list(?, 'main')`, [table]);
   return rows.map(([name, unique, origin, partial]) => {
     const iname = str(name);
-    const cols = all(db, 'SELECT cid, name FROM pragma_index_info(?) ORDER BY seqno', [iname]).map(([cid, cname]) =>
+    const cols = all(db, `SELECT cid, name FROM pragma_index_info(?, 'main') ORDER BY seqno`, [iname]).map(([cid, cname]) =>
       cname === null ? (num(cid) === -1 ? 'rowid' : '<expression>') : str(cname),
     );
     return {
