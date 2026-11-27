@@ -50,6 +50,8 @@ export function DataView({ visible }: { visible: boolean }) {
   const editable = !!table && !table.readOnly && !dbReadOnly;
   const live = useRef({ table, query, editable });
   live.current = { table, query, editable };
+  /** The query whose rows the grid shows right now; selections and keys refer to it. */
+  const shown = useRef<RowsQuery | null>(null);
 
   const load = async (q: RowsQuery, keepPosition: boolean) => {
     const gen = ++loadGen.current;
@@ -60,15 +62,15 @@ export function DataView({ visible }: { visible: boolean }) {
       setTotal(count);
       const grid = gridRef.current!;
       const source = { total: count, fetch: (offset: number, limit: number) => request('rows', { ...q, offset, limit }) };
-      if (keepPosition) {
-        grid.setSource(source, true);
-      } else grid.setSource(source);
+      grid.setSource(source, keepPosition);
+      shown.current = q;
       grid.setEmptyText(Object.values(q.filters).some((f) => f.trim()) || q.search.trim() ? 'No rows match the filters' : 'This table is empty');
     } catch (err) {
       if (gen !== loadGen.current) return;
       setTotal(0);
       setError(err instanceof Error ? err.message : String(err));
       gridRef.current?.setSource({ total: 0, fetch: async () => [] });
+      shown.current = q;
     }
   };
 
@@ -79,16 +81,14 @@ export function DataView({ visible }: { visible: boolean }) {
   };
 
   // ----- grid callbacks (read the latest state through `live`) -----
-  const keysFor = async (ranges: RowRange[]) => {
-    const q = live.current.query!;
+  const keysFor = async (q: RowsQuery, ranges: RowRange[]) => {
     const rows = await request('rowsForRanges', { query: q, ranges, full: false });
     return rows.map((r) => r.k!).filter(Boolean);
   };
 
-  const write = async (changes: { key: CellValue[]; column: string; value: ReturnType<typeof inputFromText> }[]) => {
-    const t = live.current.table!;
+  const write = async (table: string, changes: { key: CellValue[]; column: string; value: ReturnType<typeof inputFromText> }[]) => {
     try {
-      await request('updateCells', { table: t.name, changes });
+      await request('updateCells', { table, changes });
     } catch (err) {
       reportError(err, 'Edit failed');
       gridRef.current?.refresh();
@@ -97,7 +97,7 @@ export function DataView({ visible }: { visible: boolean }) {
 
   const copySelection = async () => {
     const grid = gridRef.current!;
-    const q = live.current.query;
+    const q = shown.current;
     if (!q) return;
     try {
       let text: string;
@@ -122,15 +122,17 @@ export function DataView({ visible }: { visible: boolean }) {
   };
 
   const paste = async (row: number, col: number) => {
+    // Bind the paste to the table and rows shown when it starts, even if the view changes meanwhile.
     const { table: t, editable: canEdit } = live.current;
-    if (!t || !canEdit) return;
+    const q = shown.current;
+    if (!t || !canEdit || !q || q.table !== t.name) return;
     try {
       const text = await request('readClipboard', undefined);
       const block = parseTsv(text);
       const grid = gridRef.current!;
       const height = Math.min(block.length, grid.total - row);
       if (height <= 0) return;
-      const keyRows = height === 1 && grid.getRow(row)?.k ? [grid.getRow(row)!] : await request('rowsForRanges', { query: live.current.query!, ranges: [{ from: row, to: row + height }], full: false });
+      const keyRows = height === 1 && grid.getRow(row)?.k ? [grid.getRow(row)!] : await request('rowsForRanges', { query: q, ranges: [{ from: row, to: row + height }], full: false });
       const changes: { key: CellValue[]; column: string; value: ReturnType<typeof inputFromText> }[] = [];
       block.slice(0, height).forEach((fields, r) => {
         const key = keyRows[r]?.k;
@@ -143,7 +145,7 @@ export function DataView({ visible }: { visible: boolean }) {
           changes.push({ key, column: column.name, value: inputFromText(f, column) });
         });
       });
-      if (changes.length) await write(changes);
+      if (changes.length) await write(t.name, changes);
     } catch (err) {
       reportError(err, 'Paste failed');
     }
@@ -151,9 +153,10 @@ export function DataView({ visible }: { visible: boolean }) {
 
   const deleteRanges = async (ranges: RowRange[]) => {
     const { table: t, editable: canEdit } = live.current;
-    if (!t || !canEdit) return;
+    const q = shown.current;
+    if (!t || !canEdit || !q || q.table !== t.name) return;
     try {
-      const keys = await keysFor(ranges);
+      const keys = await keysFor(q, ranges);
       if (!keys.length) return;
       if (keys.length > 1000) {
         const ok = await request('confirm', { message: `Delete ${keys.length.toLocaleString('en-US')} rows from ${t.name}?`, detail: 'You can undo this.', confirm: 'Delete' });
@@ -207,13 +210,13 @@ export function DataView({ visible }: { visible: boolean }) {
           const value = inputFromText(text, column);
           if (sameValue(data.v[col], value) || !data.k) return;
           grid.patchCell(row, col, typeof value === 'object' && value !== null && '$i' in value ? value : (value as CellValue));
-          void write([{ key: data.k, column: column.name, value }]);
+          void write(t.name, [{ key: data.k, column: column.name, value }]);
         },
         onSetNull: (row, col, data) => {
           const t = live.current.table!;
           if (data.v[col] === null || !data.k) return;
           grid.patchCell(row, col, null);
-          void write([{ key: data.k, column: t.columns[col].name, value: null }]);
+          void write(t.name, [{ key: data.k, column: t.columns[col].name, value: null }]);
         },
         onOpenRow: (row, data) => {
           if (data?.k) setPanel({ mode: 'edit', row, key: data.k });
@@ -232,10 +235,15 @@ export function DataView({ visible }: { visible: boolean }) {
         onSearch: () => searchRef.current?.focus(),
       },
     });
-    hostRef.current!.append(grid.el);
     gridRef.current = grid;
     return () => grid.dispose();
   }, []);
+
+  // The grid element lives across renders; (re)attach it whenever its host element changes.
+  useEffect(() => {
+    const grid = gridRef.current;
+    if (grid && hostRef.current && grid.el.parentElement !== hostRef.current) hostRef.current.append(grid.el);
+  });
 
   // Table switched.
   useEffect(() => {
@@ -314,8 +322,11 @@ export function DataView({ visible }: { visible: boolean }) {
 
   if (!table) {
     return (
-      <div class="placeholder">
-        <p>This database has no tables yet.</p>
+      <div class="data-view">
+        <div class="grid-host" ref={hostRef} hidden />
+        <div class="placeholder">
+          <p>This database has no tables yet.</p>
+        </div>
       </div>
     );
   }
@@ -416,6 +427,8 @@ export function DataView({ visible }: { visible: boolean }) {
       </div>
       {panel && (
         <RowPanel
+          // A schema change gives the panel a fresh state instead of old fields for new columns.
+          key={`${table.name}\u0000${table.columns.map((c) => c.name).join('\u0000')}`}
           table={table}
           target={panel}
           readOnly={!editable}

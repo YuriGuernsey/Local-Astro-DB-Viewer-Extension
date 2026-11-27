@@ -78,6 +78,8 @@ export class VirtualGrid {
   private anchor = 0;
   private editing: { row: number; col: number; data: GridRow; original: string } | null = null;
   private lastPasteKey = 0;
+  /** Pending filter debounces; cancelled when the header is rebuilt for other columns. */
+  private filterTimers = new Set<ReturnType<typeof setTimeout>>();
 
   constructor(private opts: GridOptions) {
     this.el = document.createElement('div');
@@ -331,6 +333,8 @@ export class VirtualGrid {
   }
 
   private buildHeader(): void {
+    for (const t of this.filterTimers) clearTimeout(t);
+    this.filterTimers.clear();
     this.header.textContent = '';
     this.filterRow.textContent = '';
     this.header.style.height = `${HEAD_H}px`;
@@ -389,11 +393,17 @@ export class VirtualGrid {
       input.spellcheck = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
       input.addEventListener('input', () => {
-        clearTimeout(timer);
-        timer = setTimeout(() => {
+        if (timer) {
+          clearTimeout(timer);
+          this.filterTimers.delete(timer);
+        }
+        const t = setTimeout(() => {
+          this.filterTimers.delete(t);
           this.filterValues[i] = input.value;
           this.opts.handlers.onFilter?.(i, input.value);
         }, 250);
+        timer = t;
+        this.filterTimers.add(t);
       });
       input.addEventListener('keydown', (e) => {
         e.stopPropagation();
@@ -786,6 +796,7 @@ export class VirtualGrid {
   }
 
   dispose(): void {
+    for (const t of this.filterTimers) clearTimeout(t);
     cancelAnimationFrame(this.frame);
     this.el.remove();
   }
