@@ -1,6 +1,6 @@
 // Export formats (CSV, JSON, SQL, Markdown) and the full-database SQL dump.
 // Output is produced as a list of ~1 MB chunks so large exports never build one giant string.
-import type { ExportFormat, SchemaInfo } from '../shared/protocol';
+import type { ExportFormat, SchemaInfo, TableInfo } from '../shared/protocol';
 import { quoteIdent as q } from '../shared/sql';
 import { rowOf, type Database } from './db';
 import { rawToText, sqlLiteral, toHex, type RawValue } from './values';
@@ -52,16 +52,28 @@ function mdCell(v: RawValue): string {
   return rawToText(v).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r?\n/g, '<br>');
 }
 
+/** Column names made unique by position (`id`, `id_2`…), for formats that need unique keys. */
+export function uniqueNames(columns: string[]): string[] {
+  const seen = new Set<string>();
+  return columns.map((c) => {
+    let name = c;
+    for (let n = 2; seen.has(name.toLowerCase()); n++) name = `${c}_${n}`;
+    seen.add(name.toLowerCase());
+    return name;
+  });
+}
+
 export function exportRows(src: RowSource, format: ExportFormat): string[] {
   const w = new ChunkWriter();
   const cols = src.columns;
+  const unique = uniqueNames(cols);
   switch (format) {
     case 'csv':
       w.write(cols.map(csvField).join(',') + '\n');
       for (const r of src.rows()) w.write(r.map(csvField).join(',') + '\n');
       break;
     case 'json': {
-      const keys = cols.map((c) => JSON.stringify(c));
+      const keys = unique.map((c) => JSON.stringify(c));
       let first = true;
       w.write('[');
       for (const r of src.rows()) {
@@ -73,8 +85,8 @@ export function exportRows(src: RowSource, format: ExportFormat): string[] {
     }
     case 'sql': {
       const keep = cols.map((_, i) => !src.generated?.[i]);
-      const names = cols.filter((_, i) => keep[i]).map(q).join(', ');
-      w.write((src.createSql ? src.createSql : `CREATE TABLE ${q(src.name)} (${cols.map(q).join(', ')})`) + ';\n\n');
+      const names = unique.filter((_, i) => keep[i]).map(q).join(', ');
+      w.write((src.createSql ? src.createSql : `CREATE TABLE ${q(src.name)} (${unique.map(q).join(', ')})`) + ';\n\n');
       for (const r of src.rows()) {
         w.write(`INSERT INTO ${q(src.name)} (${names}) VALUES (${r.filter((_, i) => keep[i]).map(sqlLiteral).join(', ')});\n`);
       }
@@ -90,6 +102,25 @@ export function exportRows(src: RowSource, format: ExportFormat): string[] {
     }
   }
   return w.end();
+}
+
+/**
+ * Columns written for each row. Rowids are kept, like `.dump --preserve-rowids`, so views,
+ * foreign keys and full-text indexes that refer to rows by rowid still match after a restore.
+ */
+function dumpColumns(db: Database, t: TableInfo): string[] {
+  const cols = t.columns.filter((c) => !c.generated).map((c) => c.name);
+  if (t.type === 'table' && !t.withoutRowid && t.rowidName && !t.columns.some((c) => c.isRowidAlias)) return [t.rowidName, ...cols];
+  if (t.type === 'virtual') {
+    // Full-text tables accept an explicit rowid; other modules may not have one.
+    try {
+      db.prepare(`SELECT rowid FROM main.${q(t.name)} LIMIT 0`).free();
+      if (!t.columns.some((c) => c.name.toLowerCase() === 'rowid')) return ['rowid', ...cols];
+    } catch {
+      // no rowid
+    }
+  }
+  return cols;
 }
 
 /** A full SQL dump in the spirit of the sqlite3 shell's .dump command. */
@@ -128,7 +159,7 @@ export function dumpDatabase(db: Database, schema: SchemaInfo): string[] {
     const t = byName.get(name);
     if (t?.type === 'shadow') continue; // recreated by its virtual table
     w.write(`${sql};\n`);
-    if (t) writeRows(name, t.columns.filter((c) => !c.generated).map((c) => c.name));
+    if (t) writeRows(name, dumpColumns(db, t));
   }
   if (hasSequence) {
     w.write('DELETE FROM sqlite_sequence;\n');
