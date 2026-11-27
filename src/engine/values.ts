@@ -14,6 +14,9 @@ export const FULL_BLOB_LIMIT = 1024 * 1024;
 
 const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
 const MIN_SAFE = BigInt(Number.MIN_SAFE_INTEGER);
+const MAX_INT64 = 9223372036854775807n;
+const MIN_INT64 = -9223372036854775808n;
+const inInt32 = (n: number) => n >= -2147483648 && n <= 2147483647;
 
 export function toHex(bytes: Uint8Array, limit = Infinity): string {
   const n = Math.min(bytes.length, limit);
@@ -72,21 +75,29 @@ export function decodeInput(v: InputValue, affinity: Affinity, declaredType: str
   if (v === null || typeof v === 'number') return v;
   if (typeof v === 'string') {
     if (affinity === 'BLOB' && declaredType.trim() === '' && NUMBER_RE.test(v.trim())) {
-      return parseNumber(v.trim());
+      const n = parseNumber(v.trim());
+      // sql.js binds numbers outside the int32 range as REAL, and an untyped column keeps
+      // that storage class; send whole numbers as 64-bit integers instead.
+      return typeof n === 'number' && Number.isInteger(n) && !inInt32(n) && INTEGER_RE.test(v.trim()) ? BigInt(n) : n;
     }
     return v;
   }
-  if ('$i' in v) return BigInt(v.$i);
+  if ('$i' in v) return toInteger(BigInt(v.$i));
   if ('$b' in v) return fromHex(v.$b);
   return null;
 }
 
+/** Integer text → number when exact, bigint within int64, REAL beyond (as SQLite parses such literals). */
 export function parseNumber(text: string): number | bigint {
-  if (INTEGER_RE.test(text)) {
-    const b = BigInt(text);
-    return b <= MAX_SAFE && b >= MIN_SAFE ? Number(b) : b;
-  }
+  if (INTEGER_RE.test(text)) return toInteger(BigInt(text));
   return Number(text);
+}
+
+function toInteger(b: bigint): number | bigint {
+  if (b <= MAX_SAFE && b >= MIN_SAFE) return Number(b);
+  if (b <= MAX_INT64 && b >= MIN_INT64) return b;
+  // CAST(? AS INTEGER) would clamp to the int64 limit; SQLite reads such literals as REAL.
+  return Number(b);
 }
 
 /**
