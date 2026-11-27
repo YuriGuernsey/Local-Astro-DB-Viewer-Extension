@@ -96,11 +96,22 @@ export class SqliteDocument implements vscode.CustomDocument {
       const stat = await statOrNull(this.uri);
       this.info.size = stat?.size ?? 0;
       this.fileReadOnlyReason = await this.detectFileReadOnly(stat);
-      const { raw, prepared } = await readDatabase(this.uri);
-      if (!isSqliteFile(raw)) throw new Error('This file is not a SQLite database.');
-      this.walMode = prepared.walMode;
-      let bytes = prepared.bytes;
-      if (backupId) bytes = await vscode.workspace.fs.readFile(vscode.Uri.parse(backupId));
+      let bytes: Uint8Array;
+      if (backupId) {
+        // Hot exit: the backup holds the unsaved image, even if the original moved or changed meanwhile.
+        bytes = await vscode.workspace.fs.readFile(vscode.Uri.parse(backupId));
+        if (!isSqliteFile(bytes)) throw new Error('The backup of this database is damaged.');
+        try {
+          this.walMode = (await readDatabase(this.uri)).prepared.walMode;
+        } catch {
+          // The original is unavailable; saving will recreate it.
+        }
+      } else {
+        const { raw, prepared } = await readDatabase(this.uri);
+        if (!isSqliteFile(raw)) throw new Error('This file is not a SQLite database.');
+        this.walMode = prepared.walMode;
+        bytes = prepared.bytes;
+      }
       this.worker = new WorkerClient(this.workerPath);
       const readOnly = settings.readOnly || !!this.fileReadOnlyReason;
       const engine = await this.worker.call('open', {
