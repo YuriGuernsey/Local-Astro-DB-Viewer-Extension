@@ -125,4 +125,12 @@ npm run check          # typecheck, lint and unit tests
 scripts/integration.sh # integration tests in an isolated VS Code instance
 ```
 
+`scripts/integration.sh` uses VS Code from `/Applications` on macOS, or `code` from your `PATH`. Pass another executable as the first argument or in `VSCODE_BIN`; on a headless Linux machine run it under Xvfb:
+
+```sh
+VSCODE_BIN=/usr/share/code/code xvfb-run -a scripts/integration.sh
+```
+
+The build tasks in `.vscode/tasks.json` use the problem matchers from the recommended *esbuild Problem Matchers* extension.
+
 `node scripts/build.mjs --harness` builds a browser harness (`out-harness/`) that runs the real webview against the real engine, useful for UI work without restarting the Extension Development Host. Press <kbd>F5</kbd> in VS Code to launch the extension.

@@ -24,18 +24,26 @@ function emit(ev: HostEvent) {
 }
 
 async function undo() {
-  const id = undoStack.pop();
+  const id = undoStack.at(-1);
   if (id === undefined) return;
   const r = dispatch('undo', { id });
-  redoStack.push(id);
+  if (!r.ok) {
+    log.push(`undo refused: ${r.message}`);
+    return;
+  }
+  redoStack.push(undoStack.pop()!);
   emit({ type: 'changed', schema: r.schemaChanged });
 }
 
 async function redo() {
-  const id = redoStack.pop();
+  const id = redoStack.at(-1);
   if (id === undefined) return;
   const r = dispatch('redo', { id });
-  undoStack.push(id);
+  if (!r.ok) {
+    log.push(`redo refused: ${r.message}`);
+    return;
+  }
+  undoStack.push(redoStack.pop()!);
   emit({ type: 'changed', schema: r.schemaChanged });
 }
 
