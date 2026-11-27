@@ -15,6 +15,11 @@ function initialSql(): string {
   return first ? `SELECT * FROM ${quoteIdent(first.name)} LIMIT 100;\n` : '';
 }
 
+/** The editor never takes more than the window minus room for the results. */
+function clampHeight(h: number): number {
+  return Math.round(Math.max(80, Math.min(window.innerHeight - 160, h)));
+}
+
 function formatMs(ms: number): string {
   return ms < 1 ? '<1 ms' : ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(2)} s`;
 }
@@ -43,7 +48,7 @@ export function SqlView({ visible }: { visible: boolean }) {
   const [running, setRunning] = useState(false);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [showHistory, setShowHistory] = useState(loadState().showHistory ?? true);
-  const [editorHeight, setEditorHeight] = useState(loadState().sqlEditorHeight ?? 220);
+  const [editorHeight, setEditorHeight] = useState(() => clampHeight(loadState().sqlEditorHeight ?? 220));
   const live = useRef({ result, activeSet, sort });
   live.current = { result, activeSet, sort };
 
@@ -60,7 +65,8 @@ export function SqlView({ visible }: { visible: boolean }) {
       const firstWithRows = r.results.findIndex((s) => s.columns.length > 0);
       setActiveSet(firstWithRows >= 0 ? firstWithRows : 0);
       setSort(null);
-      setHistory(await request('historyAdd', { sql }));
+      // The statement already ran: a history failure must not look like a failed (retryable) query.
+      request('historyAdd', { sql }).then(setHistory, (err) => reportError(err, 'Could not save the query history'));
     } catch (err) {
       setResult({ results: [], error: { message: err instanceof Error ? err.message : String(err), statementIndex: 0, sql }, timeMs: 0, edit: null, schemaChanged: false, notes: [] });
     } finally {
@@ -89,9 +95,10 @@ export function SqlView({ visible }: { visible: boolean }) {
         onSort: (col) => {
           const set = live.current.result?.results[live.current.activeSet];
           if (!set) return;
+          // Sort by position: result sets can repeat a column name.
           const name = set.columns[col];
           const cur = live.current.sort;
-          setSort(cur?.column !== name ? { column: name, dir: 'asc' } : cur.dir === 'asc' ? { column: name, dir: 'desc' } : null);
+          setSort(cur?.index !== col ? { column: name, dir: 'asc', index: col } : cur.dir === 'asc' ? { ...cur, dir: 'desc' } : null);
         },
         onCopy: () => void copyResult(),
       },
@@ -121,7 +128,7 @@ export function SqlView({ visible }: { visible: boolean }) {
       g.setSource({ total: 0, fetch: async () => [] });
       return;
     }
-    const sortCol = sort ? set.columns.indexOf(sort.column) : -1;
+    const sortCol = sort ? (sort.index ?? set.columns.indexOf(sort.column)) : -1;
     g.setColumns(
       set.columns.map((name, i) => {
         const sample = set.rows.find((r) => r[i] !== null)?.[i];
@@ -146,11 +153,15 @@ export function SqlView({ visible }: { visible: boolean }) {
     const rs = r?.results[i];
     const g = grid.current;
     if (!rs || !g) return;
-    const ranges = g.selectedCount() ? g.selectedRanges() : [{ from: g.active.row, to: g.active.row + 1 }];
+    // Capture what to copy before any await: the selection may move while rows are fetched.
+    const rowsMode = g.selectedCount() > 0;
+    const col = g.active.col;
+    const ranges = rowsMode ? g.selectedRanges() : [{ from: g.active.row, to: g.active.row + 1 }];
     const lines: string[] = [];
     for (const range of ranges) {
-      const rows = await request('resultRows', { resultId: rs.id, offset: range.from, limit: range.to - range.from, sort: s });
-      for (const row of rows) lines.push(g.selectedCount() ? row.map((v) => tsvField(copyText(v))).join('\t') : copyText(row[g.active.col]));
+      // Full values: grid pages carry truncated previews of long text and blobs.
+      const rows = await request('resultRows', { resultId: rs.id, offset: range.from, limit: range.to - range.from, sort: s, full: true });
+      for (const row of rows) lines.push(rowsMode ? row.map((v) => tsvField(copyText(v))).join('\t') : copyText(row[col]));
     }
     await request('copyText', { text: lines.join('\n') });
   };
@@ -160,12 +171,12 @@ export function SqlView({ visible }: { visible: boolean }) {
     const startY = e.clientY;
     const start = editorHeight;
     document.body.classList.add('resizing-v');
-    const move = (ev: MouseEvent) => setEditorHeight(Math.max(80, Math.min(window.innerHeight - 160, start + ev.clientY - startY)));
+    const move = (ev: MouseEvent) => setEditorHeight(clampHeight(start + ev.clientY - startY));
     const up = (ev: MouseEvent) => {
       document.body.classList.remove('resizing-v');
       window.removeEventListener('mousemove', move);
       window.removeEventListener('mouseup', up);
-      saveState({ sqlEditorHeight: Math.max(80, start + ev.clientY - startY) });
+      saveState({ sqlEditorHeight: clampHeight(start + ev.clientY - startY) });
     };
     window.addEventListener('mousemove', move);
     window.addEventListener('mouseup', up);
@@ -175,7 +186,8 @@ export function SqlView({ visible }: { visible: boolean }) {
     label: f.label,
     hint: `.${f.ext}`,
     disabled: !set || set.columns.length === 0,
-    onSelect: () => set && void request('export', { source: { kind: 'result', resultId: set.id }, format: f.id }).catch((err) => reportError(err, 'Export failed')),
+    // Export the order on screen, including "no sort".
+    onSelect: () => set && void request('export', { source: { kind: 'result', resultId: set.id, sort }, format: f.id }).catch((err) => reportError(err, 'Export failed')),
   }));
 
   return (

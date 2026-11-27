@@ -51,8 +51,10 @@ const theme = EditorView.theme({
 });
 
 function schemaSpec(schema: SchemaInfo): Record<string, string[]> {
-  const spec: Record<string, string[]> = {};
-  for (const t of schema.tables) spec[t.name] = t.columns.map((c) => c.name);
+  // CodeMirror reads dots in keys as schema.table, so literal dots are escaped; no prototype,
+  // so a table named __proto__ is an ordinary key.
+  const spec: Record<string, string[]> = Object.create(null);
+  for (const t of schema.tables) spec[t.name.replace(/\./g, '\\.')] = t.columns.map((c) => c.name);
   return spec;
 }
 
