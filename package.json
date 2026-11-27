@@ -1,8 +1,8 @@
 {
   "name": "localastrodb",
   "displayName": "Local AstroDB Viewer",
-  "description": "View and interact with .db files in VS Code",
-  "version": "2.0.0",
+  "description": "Open any SQLite database in VS Code and actually work with it: browse, filter, sort and edit tables, run SQL, change the schema, export data, see an ER diagram and compare two databases.",
+  "version": "3.0.0",
   "publisher": "Yurialvesguernsey",
   "icon": "media/logo.png",
   "repository": {
@@ -13,46 +13,183 @@
   "engines": {
     "vscode": "^1.90.0"
   },
-  "configuration": {
-    "type": "object",
-    "title": "Local AstroDB Configuration",
-    "properties": {
-      "localastrodb.databasePath": {
-        "type": "string",
-        "default": "/workspaces/codingsnippetshare/.astro/content.db",
-        "description": "The absolute path to the database file to open automatically."
-      }
+  "categories": [
+    "Data Science",
+    "Visualization",
+    "Other"
+  ],
+  "keywords": [
+    "sqlite",
+    "sqlite3",
+    "database",
+    "db",
+    "sql",
+    "astro",
+    "astrodb",
+    "viewer",
+    "editor",
+    "er diagram"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    },
+    "virtualWorkspaces": {
+      "supported": "limited",
+      "description": "Databases are read and written through the VS Code file system API; export to disk requires a local or remote file system."
     }
   },
-  "activationEvents": [
-    "onCommand:localastrodb.openDatabase",
-    "onCommand:localastrodb.openQueryEditor",
-    "onView:localastrodbTreeView"
-  ],
   "main": "./dist/extension.js",
   "contributes": {
+    "customEditors": [
+      {
+        "viewType": "localastrodb.editor",
+        "displayName": "Local AstroDB Viewer",
+        "selector": [
+          {
+            "filenamePattern": "*.db"
+          },
+          {
+            "filenamePattern": "*.sqlite"
+          },
+          {
+            "filenamePattern": "*.sqlite3"
+          },
+          {
+            "filenamePattern": "*.db3"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
     "commands": [
       {
         "command": "localastrodb.openDatabase",
-        "title": "Local AstroDB: Open .db file",
+        "title": "Open Database...",
+        "category": "Local AstroDB",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "localastrodb.newDatabase",
+        "title": "New Database...",
+        "category": "Local AstroDB",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "localastrodb.runQuery",
+        "title": "Run SQL Query",
+        "category": "Local AstroDB",
+        "icon": "$(play)"
+      },
+      {
+        "command": "localastrodb.showErDiagram",
+        "title": "Show ER Diagram",
+        "category": "Local AstroDB",
+        "icon": "$(type-hierarchy)"
+      },
+      {
+        "command": "localastrodb.compare",
+        "title": "Compare with Another Database...",
+        "category": "Local AstroDB",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "localastrodb.exportTable",
+        "title": "Export Table (CSV, JSON, SQL, Markdown)...",
+        "category": "Local AstroDB",
+        "icon": "$(export)"
+      },
+      {
+        "command": "localastrodb.exportDump",
+        "title": "Export Database as SQL Dump...",
+        "category": "Local AstroDB",
+        "icon": "$(file-code)"
+      },
+      {
+        "command": "localastrodb.reload",
+        "title": "Reload Database from Disk",
+        "category": "Local AstroDB",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "localastrodb.copyTypes",
+        "title": "Copy Schema as TypeScript Types",
+        "category": "Local AstroDB",
+        "icon": "$(symbol-interface)"
+      },
+      {
+        "command": "localastrodb.openWith",
+        "title": "Open with Local AstroDB Viewer",
         "category": "Local AstroDB"
       },
       {
-        "command": "localastrodb.openQueryEditor",
-        "title": "Local AstroDB: Open Query Editor",
+        "command": "localastrodb.openRecent",
+        "title": "Open Recent Database",
         "category": "Local AstroDB"
       },
       {
-        "command": "localastrodb.refresh",
-        "title": "Local AstroDB: Refresh Tree View",
-        "category": "Local AstroDB"
+        "command": "localastrodb.clearRecent",
+        "title": "Clear Recent Databases",
+        "category": "Local AstroDB",
+        "icon": "$(clear-all)"
       },
       {
-        "command": "localastrodb.viewTableData",
-        "title": "Local AstroDB: View Table Data",
-        "category": "Local AstroDB"
+        "command": "localastrodb.refreshSidebar",
+        "title": "Refresh",
+        "category": "Local AstroDB",
+        "icon": "$(refresh)"
       }
     ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "localastrodb.openWith",
+          "when": "resourceExtname =~ /^\\.(db|sqlite|sqlite3|db3)$/i",
+          "group": "navigation@20"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "localastrodb.openWith",
+          "when": "false"
+        },
+        {
+          "command": "localastrodb.openRecent",
+          "when": "false"
+        },
+        {
+          "command": "localastrodb.refreshSidebar",
+          "when": "false"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "localastrodb.openDatabase",
+          "when": "view == localastrodbTreeView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "localastrodb.newDatabase",
+          "when": "view == localastrodbTreeView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "localastrodb.refreshSidebar",
+          "when": "view == localastrodbTreeView",
+          "group": "navigation@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "localastrodb.clearRecent",
+          "when": "view == localastrodbTreeView && viewItem == recentGroup",
+          "group": "inline"
+        }
+      ]
+    },
     "viewsContainers": {
       "activitybar": [
         {
@@ -66,9 +203,42 @@
       "localastrodb": [
         {
           "id": "localastrodbTreeView",
-          "name": "Database Schema"
+          "name": "Local AstroDB"
         }
       ]
+    },
+    "configuration": {
+      "type": "object",
+      "title": "Local AstroDB",
+      "properties": {
+        "localastrodb.openReadOnly": {
+          "type": "boolean",
+          "default": false,
+          "description": "Open databases read-only. Editing, schema changes and saving are disabled."
+        },
+        "localastrodb.statusBar.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the database size, table count and SQLite version in the status bar."
+        },
+        "localastrodb.showOpenAsTextHint": {
+          "type": "boolean",
+          "default": true,
+          "description": "When a SQLite database is opened in the text editor, offer to open it with Local AstroDB Viewer."
+        },
+        "localastrodb.undoMemoryLimitMB": {
+          "type": "number",
+          "default": 512,
+          "minimum": 16,
+          "description": "Memory budget (MB) for undoing SQL statements and schema changes. Older snapshots beyond this budget can no longer be undone."
+        },
+        "localastrodb.maxResultRows": {
+          "type": "number",
+          "default": 100000,
+          "minimum": 100,
+          "description": "Maximum number of rows kept per SQL result set."
+        }
+      }
     }
   },
   "scripts": {
