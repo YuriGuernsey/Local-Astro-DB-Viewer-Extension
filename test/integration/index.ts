@@ -111,6 +111,20 @@ export async function run(): Promise<void> {
     await waitFor(() => tabFor(uri) && !tabFor(uri)!.isDirty, 'clean after redo');
   });
 
+  await step('dirty state follows the content, not the undo depth', async () => {
+    doc.applyMutation(await doc.call('updateCells', { table: 'genres', changes: [{ key: [3], column: 'name', value: 'A' }] }));
+    await command('workbench.action.files.save');
+    await waitFor(() => tabFor(uri) && !tabFor(uri)!.isDirty, 'saved A');
+    await command('undo');
+    await waitFor(() => tabFor(uri)?.isDirty, 'dirty after undo');
+    doc.applyMutation(await doc.call('updateCells', { table: 'genres', changes: [{ key: [3], column: 'name', value: 'B' }] }));
+    await waitFor(() => tabFor(uri)?.isDirty, 'dirty after B');
+    assert.equal(doc.isDirty, true, 'B was never saved');
+    await command('workbench.action.files.save');
+    await waitFor(() => tabFor(uri) && !tabFor(uri)!.isDirty && !doc.isDirty, 'saved B');
+    assert.deepEqual(readDisk(file, 'SELECT name FROM genres WHERE id = 3'), [['B']]);
+  });
+
   await step('SQL that changes data is undoable; revert restores the file', async () => {
     const r = await doc.call('exec', { sql: 'DELETE FROM genres WHERE id = 8; CREATE TABLE extra (a);' });
     doc.applyMutation(r);

@@ -33,8 +33,14 @@ export class SqliteDocument implements vscode.CustomDocument {
   /** Read-only because of the file itself (permissions, file system), independent of settings. */
   private fileReadOnlyReason: string | undefined;
   private diskSignature = '';
-  private version = 0;
-  private savedVersion = 0;
+  /** Signature of an external change the user chose to keep their edits over. */
+  private dismissedSignature = '';
+  /**
+   * Ids of the edits currently applied, oldest first. The last id identifies the content,
+   * so "save A, undo A, make B" is dirty even though the undo depth matches.
+   */
+  private applied: number[] = [];
+  private savedApplied: number[] = [];
   private watcher: vscode.FileSystemWatcher | undefined;
   private checkTimer: ReturnType<typeof setTimeout> | undefined;
   private disposed = false;
@@ -69,7 +75,7 @@ export class SqliteDocument implements vscode.CustomDocument {
   }
 
   get isDirty(): boolean {
-    return this.version !== this.savedVersion;
+    return (this.applied.at(-1) ?? 0) !== (this.savedApplied.at(-1) ?? 0);
   }
 
   get readOnly(): boolean {
@@ -105,7 +111,7 @@ export class SqliteDocument implements vscode.CustomDocument {
       this.info.readOnly = readOnly;
       this.info.readOnlyReason = this.fileReadOnlyReason ?? (settings.readOnly ? 'Opened read-only (localastrodb.openReadOnly).' : undefined);
       this.diskSignature = await this.computeSignature();
-      if (backupId) this.version = 1; // restored from a hot-exit backup: unsaved
+      if (backupId) this.applied = [-1]; // restored from a hot-exit backup: unsaved
     } catch (err) {
       this.worker?.dispose();
       this.worker = null;
@@ -139,7 +145,7 @@ export class SqliteDocument implements vscode.CustomDocument {
   applyMutation(result: MutationResult): void {
     if (result.edit) {
       const { id, label } = result.edit;
-      this.version++;
+      this.applied.push(id);
       this._onDidEdit.fire({
         document: this,
         label,
@@ -151,10 +157,16 @@ export class SqliteDocument implements vscode.CustomDocument {
   }
 
   private async step(id: number, dir: 'undo' | 'redo'): Promise<void> {
-    this.version += dir === 'undo' ? -1 : 1;
     try {
       const outcome = await this.call(dir, { id });
-      if (!outcome.ok && outcome.message) void vscode.window.showWarningMessage(outcome.message);
+      if (outcome.ok) {
+        // Track the content only once the engine really changed it.
+        if (dir === 'redo') this.applied.push(id);
+        else {
+          const at = this.applied.lastIndexOf(id);
+          if (at >= 0) this.applied.splice(at, 1);
+        }
+      } else if (outcome.message) void vscode.window.showWarningMessage(outcome.message);
       this.changed(outcome.schemaChanged);
     } catch (err) {
       void vscode.window.showErrorMessage(`${dir === 'undo' ? 'Undo' : 'Redo'} failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -182,13 +194,16 @@ export class SqliteDocument implements vscode.CustomDocument {
   // ---------- saving ----------
 
   async save(): Promise<void> {
+    // Capture what is being saved before serializing: an edit arriving during the write stays unsaved.
+    const saving = this.applied.slice();
     await this.saveAs(this.uri);
-    this.savedVersion = this.version;
+    this.savedApplied = saving;
   }
 
   async saveAs(target: vscode.Uri): Promise<void> {
-    const bytes = await this.call('serialize', undefined);
     const sameFile = target.toString() === this.uri.toString();
+    if (sameFile) await this.confirmOverwrite();
+    const bytes = await this.call('serialize', undefined);
     if (sameFile) {
       restoreJournalMode(bytes, this.walMode);
       await vscode.workspace.fs.writeFile(target, bytes);
@@ -210,9 +225,31 @@ export class SqliteDocument implements vscode.CustomDocument {
     }
   }
 
+  /** Asks before saving over changes another program made since the file was loaded. */
+  private async confirmOverwrite(): Promise<void> {
+    if (!(await statOrNull(this.uri))) return;
+    const sig = await this.computeSignature();
+    if (sig === this.diskSignature || sig === this.dismissedSignature) return;
+    const choice = await vscode.window.showWarningMessage(
+      `${this.name} was changed by another program after it was opened.`,
+      { modal: true, detail: 'Saving replaces those changes (including commits still in its -wal file) with your version.' },
+      'Overwrite',
+    );
+    if (choice !== 'Overwrite') throw new Error(`Save canceled: ${this.name} was changed by another program. Reload it, or save again to overwrite.`);
+  }
+
   async revert(): Promise<void> {
     await this.reload(false);
-    this.version = this.savedVersion;
+    this.applied = this.savedApplied.slice();
+  }
+
+  /** Reloads from disk, discarding unsaved edits; earlier undo entries become stale. */
+  async reloadFromDisk(): Promise<void> {
+    const wasDirty = this.isDirty;
+    await this.reload(true);
+    this.savedApplied = this.applied.slice();
+    // VS Code still shows the editor as modified: let it revert (which reloads the same content).
+    if (wasDirty) this._onDidRequestRevert.fire();
   }
 
   async backup(destination: vscode.Uri): Promise<vscode.CustomDocumentBackup> {
@@ -280,14 +317,16 @@ export class SqliteDocument implements vscode.CustomDocument {
   private async checkExternalChange(): Promise<void> {
     if (this.disposed || !(await statOrNull(this.uri))) return;
     const sig = await this.computeSignature();
-    if (sig === this.diskSignature) return;
-    this.diskSignature = sig;
+    // diskSignature only moves after a successful load, so a failed reload is retried on the next change.
+    if (sig === this.diskSignature || sig === this.dismissedSignature) return;
+    const failed = (err: unknown) =>
+      void vscode.window.showErrorMessage(`Could not reload ${this.name}: ${err instanceof Error ? err.message : String(err)}`);
     if (!this.isDirty) {
       try {
         await this.reload(true);
         vscode.window.setStatusBarMessage(`$(sync) ${this.name} was changed on disk and reloaded`, 4000);
       } catch (err) {
-        void vscode.window.showErrorMessage(`Could not reload ${this.name}: ${err instanceof Error ? err.message : String(err)}`);
+        failed(err);
       }
       return;
     }
@@ -297,9 +336,14 @@ export class SqliteDocument implements vscode.CustomDocument {
       'Keep My Changes',
     );
     if (choice === 'Reload') {
-      await this.reload(true);
-      this.savedVersion = this.version;
-      this._onDidRequestRevert.fire();
+      try {
+        await this.reloadFromDisk();
+      } catch (err) {
+        failed(err);
+      }
+    } else {
+      // Don't ask again for this change; saving will overwrite it without another prompt.
+      this.dismissedSignature = sig;
     }
   }
 

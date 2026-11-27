@@ -134,11 +134,9 @@ export function registerCommands(
         'Reload',
       );
       if (ok !== 'Reload') return;
-      provider.show(doc);
-      await vscode.commands.executeCommand('workbench.action.files.revert');
-      return;
     }
-    await doc.reload(false);
+    // The file may have been replaced by another program: earlier undo entries must not apply to it.
+    await doc.reloadFromDisk();
     vscode.window.setStatusBarMessage(`$(sync) Reloaded ${doc.name} (${formatBytes(doc.info.size)})`, 3000);
   });
 
