@@ -271,6 +271,124 @@ describe('running SQL', () => {
   });
 });
 
+describe('review fixes', () => {
+  it('detects case-only changes in NOCASE columns and literal changes in the schema', async () => {
+    const left = await session(await bytesFromSql(`CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT COLLATE NOCASE, c TEXT DEFAULT 'US'); INSERT INTO t VALUES (1, 'ABC', 'x');`));
+    const right = await bytesFromSql(`CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT COLLATE NOCASE, c TEXT DEFAULT 'us'); INSERT INTO t VALUES (1, 'abc', 'x');`);
+    const t = left.compare(right, 'l', 'r').tables[0];
+    assert.equal(t.changed.count, 1);
+    assert.deepEqual(t.changed.rows[0].changed, [true, false]);
+    assert.equal(t.schemaChanged, true);
+  });
+
+  it('does not match rows by a primary key that contains NULL', async () => {
+    const bytes = await bytesFromSql(`CREATE TABLE t (k TEXT PRIMARY KEY, v TEXT); INSERT INTO t VALUES (NULL, 'x'), (NULL, 'y');`);
+    const s = await session(bytes.slice());
+    const t = s.compare(bytes.slice(), 'l', 'r').tables[0];
+    assert.equal(t.keyKind, 'rowid');
+    assert.equal(t.status, 'same');
+  });
+
+  it('flags changed cells even when their previews look the same', async () => {
+    const left = await session(await bytesFromSql(`CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES (1, printf('%.2000c', 'a') || 'X');`));
+    const right = await bytesFromSql(`CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES (1, printf('%.2000c', 'a') || 'Y');`);
+    const row = left.compare(right, 'l', 'r').tables[0].changed.rows[0];
+    assert.deepEqual(row.before, row.after);
+    assert.deepEqual(row.changed, [true]);
+  });
+
+  it('refuses edits that would silently replace another row', async () => {
+    const s = await session(await bytesFromSql(`CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT UNIQUE ON CONFLICT REPLACE); INSERT INTO t VALUES (1, 'a'), (2, 'b');`));
+    assert.throws(() => s.updateCells('t', [{ key: [1], column: 'name', value: 'b' }]), /UNIQUE/);
+    assert.throws(() => s.insertRow('t', { name: 'b' }), /UNIQUE/);
+    assert.equal(s.count(q('t')), 2);
+  });
+
+  it('reads and edits the main table even when a TEMP table shadows it', async () => {
+    const s = await musicSession();
+    s.exec('CREATE TEMP TABLE genres (id INTEGER PRIMARY KEY, name TEXT)');
+    assert.equal(s.count(q('genres')), 8);
+    s.updateCells('genres', [{ key: [1], column: 'name', value: 'Rock!' }]);
+    assert.equal(s.exec('SELECT name FROM main.genres WHERE id = 1').results[0].rows[0][0], 'Rock!');
+    assert.equal(s.schema().tables.filter((t) => t.name === 'genres').length, 1);
+  });
+
+  it('restores rows removed by ON DELETE CASCADE when undoing a delete', async () => {
+    const s = await session(
+      await bytesFromSql(`CREATE TABLE p (id INTEGER PRIMARY KEY); CREATE TABLE c (id INTEGER PRIMARY KEY, p INTEGER REFERENCES p(id) ON DELETE CASCADE);
+        INSERT INTO p VALUES (1); INSERT INTO c VALUES (10, 1), (11, 1);`),
+    );
+    s.exec('PRAGMA foreign_keys = ON');
+    const res = s.deleteRows('p', [[1]]);
+    assert.equal(s.count(q('c')), 0);
+    s.undo(res.edit!.id);
+    assert.equal(s.count(q('c')), 2);
+    assert.equal(s.exec('PRAGMA foreign_keys').results[0].rows[0][0], 1, 'foreign_keys survives the snapshot restore');
+  });
+
+  it('applies several changes to one row when its key changes', async () => {
+    const s = await musicSession();
+    const res = s.updateCells('genres', [
+      { key: [1], column: 'id', value: '100' },
+      { key: [1], column: 'name', value: 'Rock 100' },
+    ]);
+    assert.deepEqual(s.getRow('genres', [100]), [100, 'Rock 100']);
+    s.undo(res.edit!.id);
+    assert.deepEqual(s.getRow('genres', [1]), [1, 'Rock']);
+    s.redo(res.edit!.id);
+    assert.deepEqual(s.getRow('genres', [100]), [100, 'Rock 100']);
+  });
+
+  it('blocks undo and redo while read-only', async () => {
+    const s = await musicSession();
+    const res = s.updateCells('genres', [{ key: [1], column: 'name', value: 'x' }]);
+    s.setReadOnly(true);
+    const out = s.undo(res.edit!.id);
+    assert.equal(out.ok, false);
+    assert.equal(s.getRow('genres', [1])![1], 'x');
+  });
+
+  it('returns 200,000 selected rows without overflowing the call stack', async () => {
+    const s = await session(
+      await bytesFromSql('CREATE TABLE n (x INTEGER); WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 200000) INSERT INTO n SELECT x FROM c;'),
+    );
+    assert.equal(s.rowsForRanges(q('n'), [{ from: 0, to: 200000 }], false).length, 200000);
+  });
+
+  it('rolls back when the implicit COMMIT fails', async () => {
+    const s = await session(
+      await bytesFromSql('CREATE TABLE p (id INTEGER PRIMARY KEY); CREATE TABLE c (id INTEGER PRIMARY KEY, p INTEGER REFERENCES p(id) DEFERRABLE INITIALLY DEFERRED);'),
+    );
+    s.exec('PRAGMA foreign_keys = ON');
+    const r = s.exec('BEGIN; INSERT INTO c VALUES (1, 99);');
+    assert.match(r.error!.message, /FOREIGN KEY/);
+    assert.equal(s.count(q('c')), 0);
+    assert.ok(s.serialize().length > 0, 'no transaction left open');
+  });
+
+  it('stores large integers typed into untyped columns as INTEGER', async () => {
+    const s = await session(await bytesFromSql('CREATE TABLE t (id INTEGER PRIMARY KEY, x); INSERT INTO t VALUES (1, NULL);'));
+    s.updateCells('t', [{ key: [1], column: 'x', value: '5000000000' }]);
+    assert.deepEqual(s.exec('SELECT typeof(x), x FROM t').results[0].rows[0], ['integer', 5000000000]);
+  });
+
+  it('does not clamp integers beyond the 64-bit range in filters', async () => {
+    const s = await session(await bytesFromSql('CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (9223372036854775807);'));
+    assert.equal(s.count(q('t', { filters: { x: '=99999999999999999999' } })), 0);
+    assert.equal(s.count(q('t', { filters: { x: '=9223372036854775807' } })), 1);
+  });
+
+  it('drops the redo image when it does not fit the undo budget', async () => {
+    const bytes = await musicDb();
+    const s = await session(bytes, { undoBudgetBytes: Math.ceil(bytes.length * 1.5) });
+    const r = s.exec('DELETE FROM genres WHERE id = 8');
+    assert.equal(s.undo(r.edit!.id).ok, true);
+    assert.equal(s.count(q('genres')), 8);
+    assert.equal(s.redo(r.edit!.id).ok, true, 'redo re-runs the SQL');
+    assert.equal(s.count(q('genres')), 7);
+  });
+});
+
 describe('compare', () => {
   it('finds added, removed and changed rows and schema changes', async () => {
     const left = await musicSession();
@@ -344,12 +462,54 @@ describe('export', () => {
     assert.equal(copy.exec("SELECT count(*) FROM sqlite_schema WHERE name = 'idx_tracks_album'")[0].values[0][0], 1);
   });
 
-  it('exports query results in their sorted order', async () => {
+  it('exports query results in the order shown', async () => {
     const s = await musicSession();
     const r = s.exec('SELECT id, name FROM genres');
-    s.resultRows(r.results[0].id, 0, 10, { column: 'name', dir: 'desc' });
-    const csv = s.exportData({ kind: 'result', resultId: r.results[0].id }, 'csv').join('');
-    assert.equal(csv.split('\n')[1], '7,Soul');
+    const id = r.results[0].id;
+    s.resultRows(id, 0, 10, { column: 'name', dir: 'desc' });
+    assert.equal(s.exportData({ kind: 'result', resultId: id, sort: { column: 'name', dir: 'desc' } }, 'csv').join('').split('\n')[1], '7,Soul');
+    // After clearing the sort, the export follows the query order again (not the cached sort).
+    assert.equal(s.exportData({ kind: 'result', resultId: id, sort: null }, 'csv').join('').split('\n')[1], '1,Rock');
+  });
+
+  it('gives duplicate result columns unique names in JSON and SQL', async () => {
+    const s = await musicSession();
+    const r = s.exec('SELECT 1 AS id, 2 AS id');
+    const json = JSON.parse(s.exportData({ kind: 'result', resultId: r.results[0].id }, 'json').join(''));
+    assert.deepEqual(json, [{ id: 1, id_2: 2 }]);
+    const sql = s.exportData({ kind: 'result', resultId: r.results[0].id }, 'sql').join('');
+    const SQL = await loadSql();
+    const db = new SQL.Database();
+    db.exec(sql);
+    assert.deepEqual(db.exec('SELECT * FROM query_results')[0].values, [[1, 2]]);
+  });
+
+  it('sorts results by column position when names repeat', async () => {
+    const s = await musicSession();
+    const r = s.exec('SELECT 1 AS x, 20 AS x UNION ALL SELECT 2, 10');
+    const rows = s.resultRows(r.results[0].id, 0, 10, { column: 'x', dir: 'asc', index: 1 });
+    assert.deepEqual(rows, [
+      [2, 10],
+      [1, 20],
+    ]);
+  });
+
+  it('copies full result values on request', async () => {
+    const s = await musicSession();
+    const r = s.exec("SELECT printf('%.3000c', 'a') AS long");
+    assert.equal(typeof s.resultRows(r.results[0].id, 0, 1, null)[0][0], 'object');
+    assert.equal((s.resultRows(r.results[0].id, 0, 1, null, true)[0][0] as string).length, 3000);
+  });
+
+  it('keeps rowids in the dump', async () => {
+    const s = await session(
+      await bytesFromSql(`CREATE TABLE notes (body TEXT); INSERT INTO notes (rowid, body) VALUES (42, 'answer'), (7, 'seven');
+        CREATE VIEW answer AS SELECT body FROM notes WHERE rowid = 42;`),
+    );
+    const SQL = await loadSql();
+    const copy = new SQL.Database();
+    copy.exec(s.dump().join(''));
+    assert.deepEqual(copy.exec('SELECT body FROM answer')[0].values, [['answer']]);
   });
 });
 
