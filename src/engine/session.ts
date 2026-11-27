@@ -61,6 +61,7 @@ interface StoredResult {
   columns: string[];
   rows: RawValue[][];
   sort: SortSpec | null;
+  sortCol: number;
   order: number[] | null;
 }
 
@@ -593,7 +594,7 @@ export class DbSession {
         stmt.free();
         const changed = num(scalar(this.db, 'SELECT total_changes()')) !== changes0;
         const id = this.nextResultId++;
-        this.results.set(id, { columns, rows, sort: null, order: null });
+        this.results.set(id, { columns, rows, sort: null, sortCol: -1, order: null });
         results.push({
           id,
           sql: text,
@@ -651,26 +652,28 @@ export class DbSession {
     return { results, error, timeMs: performance.now() - t0, edit, schemaChanged, notes };
   }
 
-  resultRows(resultId: number, offset: number, limit: number, sort: SortSpec | null): CellValue[][] {
+  resultRows(resultId: number, offset: number, limit: number, sort: SortSpec | null, full = false): CellValue[][] {
     const r = this.results.get(resultId);
     if (!r) throw new Error('This result is no longer available. Run the query again.');
     const order = this.resultOrder(r, sort);
     const out: CellValue[][] = [];
     for (let i = offset; i < Math.min(offset + limit, r.rows.length); i++) {
-      out.push(r.rows[order ? order[i] : i].map((v) => encodeCell(v)));
+      out.push(r.rows[order ? order[i] : i].map((v) => encodeCell(v, full ? 'full' : 'grid')));
     }
     return out;
   }
 
   private resultOrder(r: StoredResult, sort: SortSpec | null): number[] | null {
     if (!sort) return null;
-    if (r.sort && r.sort.column === sort.column && r.sort.dir === sort.dir) return r.order;
-    const col = r.columns.indexOf(sort.column);
+    // Result sets can repeat a column name, so the position wins over the label.
+    const col = sort.index !== undefined && sort.index >= 0 && sort.index < r.columns.length ? sort.index : r.columns.indexOf(sort.column);
     if (col < 0) return null;
+    if (r.sort && r.sortCol === col && r.sort.dir === sort.dir) return r.order;
     const dir = sort.dir === 'desc' ? -1 : 1;
     const order = r.rows.map((_, i) => i);
     order.sort((a, b) => dir * compareRaw(r.rows[a][col], r.rows[b][col]) || a - b);
     r.sort = sort;
+    r.sortCol = col;
     r.order = order;
     return order;
   }
@@ -685,7 +688,7 @@ export class DbSession {
     if (source.kind === 'result') {
       const r = this.results.get(source.resultId);
       if (!r) throw new Error('This result is no longer available. Run the query again.');
-      const order = r.order;
+      const order = this.resultOrder(r, source.sort ?? null);
       return {
         name: 'query_results',
         columns: r.columns,

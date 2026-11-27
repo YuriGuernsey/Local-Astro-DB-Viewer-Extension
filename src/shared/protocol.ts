@@ -106,6 +106,8 @@ export interface DbInfo {
 export interface SortSpec {
   column: string;
   dir: 'asc' | 'desc';
+  /** Column position, for result sets that repeat a column name. */
+  index?: number;
 }
 
 export interface RowsQuery {
@@ -179,7 +181,10 @@ export const EXPORT_FORMATS: { id: ExportFormat; label: string; ext: string }[] 
   { id: 'md', label: 'Markdown', ext: 'md' },
 ];
 
-export type ExportSource = { kind: 'table'; table: string; query?: RowsQuery } | { kind: 'result'; resultId: number };
+export type ExportSource =
+  | { kind: 'table'; table: string; query?: RowsQuery }
+  /** `sort` is the order shown in the grid (null for the query's own order). */
+  | { kind: 'result'; resultId: number; sort?: SortSpec | null };
 
 // ---------- Compare ----------
 
@@ -257,7 +262,8 @@ export interface WebviewApi {
   insertRow: { params: { table: string; values: Record<string, InputValue> }; result: MutationResult & { key: CellValue[] | null } };
   deleteRows: { params: { table: string; keys: CellValue[][] }; result: MutationResult };
   exec: { params: { sql: string }; result: ExecResult };
-  resultRows: { params: { resultId: number; offset: number; limit: number; sort: SortSpec | null }; result: CellValue[][] };
+  /** `full`: complete values instead of grid previews (for the clipboard). */
+  resultRows: { params: { resultId: number; offset: number; limit: number; sort: SortSpec | null; full?: boolean }; result: CellValue[][] };
   /** Schema change. `inverse` (when known) undoes it cheaply; otherwise a snapshot is used. */
   runDdl: { params: { statements: string[]; label: string; inverse?: string[] }; result: MutationResult };
 

@@ -72,7 +72,7 @@ export function createDispatcher(SQL: SqlJsStatic): Dispatch {
     insertRow: (p) => s().insertRow(p.table, p.values),
     deleteRows: (p) => s().deleteRows(p.table, p.keys),
     exec: (p) => s().exec(p.sql),
-    resultRows: (p) => s().resultRows(p.resultId, p.offset, p.limit, p.sort),
+    resultRows: (p) => s().resultRows(p.resultId, p.offset, p.limit, p.sort, p.full),
     runDdl: (p) => s().runDdl(p.statements, p.label, p.inverse),
   };
   return ((method: EngineMethod, params: unknown) => {
