@@ -27,7 +27,7 @@ import { exportRows, dumpDatabase, type RowSource } from './exporters';
 import { buildWhere, keyColumns, orderBy, type Where } from './filters';
 import { findTable, readSchema, selectList } from './schema';
 import { schemaToTypeScript } from './tsTypes';
-import { compareRaw, decodeCell, decodeInput, encodeCell, placeholder, type RawValue } from './values';
+import { compareRaw, decodeCell, decodeInput, encodeCell, placeholder, toHex, type RawValue } from './values';
 
 export interface SessionOptions {
   readOnly: boolean;
@@ -225,7 +225,7 @@ export class DbSession {
     for (const r of ranges) {
       const limit = Math.min(r.to - r.from, MAX_RANGE_ROWS - out.length);
       if (limit <= 0) break;
-      out.push(...this.selectRows(t, query, r.from, limit, full ? 'full' : 'grid'));
+      for (const row of this.selectRows(t, query, r.from, limit, full ? 'full' : 'grid')) out.push(row);
     }
     return out;
   }
@@ -352,6 +352,9 @@ export class DbSession {
     const e = this.edits.get(id);
     const verb = dir === 'undo' ? 'undone' : 'redone';
     if (!e) return { ok: false, message: `This change can no longer be ${verb}.`, schemaChanged: false };
+    if (this.opts.readOnly) {
+      return { ok: false, message: `The database is open read-only, so changes can't be ${verb}.`, schemaChanged: false };
+    }
     if (e.stale) {
       return { ok: false, message: `The database was reloaded from disk, so this change can no longer be ${verb}.`, schemaChanged: false };
     }
@@ -423,15 +426,21 @@ export class DbSession {
       if (!r) throw new Error(`Row not found in "${t.name}". It may have been changed or deleted.`);
       return r;
     };
+    const rowId = (k: RawValue[]) => k.map((v) => (v instanceof Uint8Array ? 'x' + toHex(v) : `${typeof v}:${String(v)}`)).join('|');
     const forward = (first: boolean) => {
+      // Several changes to one row (say, its key and another field) follow the row as its key changes.
+      const current = new Map<string, RawValue[]>();
       for (const op of ops) {
+        const id = rowId(op.key);
+        const key = current.get(id) ?? op.key;
         if (first) {
-          const w = this.keyWhere(t, op.key);
-          const cur = one(this.db, `SELECT ${q(op.col.name)} FROM ${q(t.name)} WHERE ${w.sql}`, w.params);
+          const w = this.keyWhere(t, key);
+          const cur = one(this.db, `SELECT ${q(op.col.name)} FROM ${main(t.name)} WHERE ${w.sql}`, w.params);
           if (!cur) throw new Error(`Row not found in "${t.name}". It may have been changed or deleted.`);
           op.old = cur[0];
         }
-        op.newKey = set(op.col, op.key, op.value);
+        op.newKey = set(op.col, key, op.value);
+        current.set(id, op.newKey);
       }
     };
     const backward = () => {
