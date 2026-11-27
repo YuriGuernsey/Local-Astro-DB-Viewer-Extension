@@ -198,6 +198,8 @@ export interface CompareChangedRow {
   key: CellValue[];
   before: CellValue[];
   after: CellValue[];
+  /** Per column: whether the stored values differ (previews may look identical). */
+  changed: boolean[];
 }
 
 export interface TableDiff {

@@ -3,8 +3,8 @@
 // matched by primary key (or rowid). The right database is ATTACHed so the row diff
 // runs inside SQLite.
 import type { CompareChangedRow, CompareResult, SchemaInfo, TableDiff, TableInfo } from '../shared/protocol';
-import { quoteIdent as q } from '../shared/sql';
-import { all, fileNameOf, num, scalar, type Database, type SqlJsStatic } from './db';
+import { quoteIdent as q, tokenize } from '../shared/sql';
+import { all, fileNameOf, num, one, scalar, type Database, type SqlJsStatic } from './db';
 import { readSchema } from './schema';
 import { encodeCell, type RawValue } from './values';
 
@@ -12,7 +12,11 @@ export const COMPARE_ROW_LIMIT = 50;
 const RIGHT = 'localastrodb_compare';
 
 const comparable = (t: TableInfo) => (t.type === 'table' || t.type === 'virtual') && !t.name.toLowerCase().startsWith('sqlite_');
-const norm = (sql: string | null) => (sql ?? '').replace(/\s+/g, ' ').replace(/\s*([(),])\s*/g, '$1').trim().toLowerCase();
+/** Schema SQL compared token by token: keywords and names ignore case and spacing, literals don't. */
+const norm = (sql: string | null) =>
+  tokenize(sql ?? '')
+    .map((t) => (t.type === 'word' ? t.text.toUpperCase() : t.text))
+    .join(' ');
 
 export function compareDatabases(
   SQL: SqlJsStatic,
@@ -127,7 +131,13 @@ function diffRows(db: Database, a: TableInfo, b: TableInfo, d: TableDiff): void 
   if (common.length === 0) return;
   const A = `main.${q(a.name)}`;
   const B = `${RIGHT}.${q(b.name)}`;
-  const samePk = a.pk.length > 0 && a.pk.length === b.pk.length && a.pk.every((c, i) => c.toLowerCase() === b.pk[i].toLowerCase());
+  const samePk =
+    a.pk.length > 0 &&
+    a.pk.length === b.pk.length &&
+    a.pk.every((c, i) => c.toLowerCase() === b.pk[i].toLowerCase()) &&
+    // Ordinary rowid tables allow NULL in a non-INTEGER primary key; such keys don't identify rows.
+    !hasNullKey(db, A, a.pk) &&
+    !hasNullKey(db, B, b.pk);
   let keyA: string[];
   let keyB: string[];
   if (samePk) {
@@ -147,8 +157,10 @@ function diffRows(db: Database, a: TableInfo, b: TableInfo, d: TableDiff): void 
   }
 
   const keySet = new Set(d.keyKind === 'pk' ? d.keyColumns.map((c) => c.toLowerCase()) : []);
-  const match = keyA.map((k, i) => `${keyB[i]} IS ${k}`).join(' AND ');
-  const matchRev = keyB.map((k, i) => `${keyA[i]} IS ${k}`).join(' AND ');
+  // Stored values are compared byte for byte, whatever collation each schema declares, and
+  // both directions use the same rule so a key can't match one way and not the other.
+  const match = keyA.map((k, i) => `${keyB[i]} COLLATE BINARY IS ${k}`).join(' AND ');
+  const matchRev = keyB.map((k, i) => `${keyA[i]} COLLATE BINARY IS ${k}`).join(' AND ');
 
   // Removed: in left, not in right.
   const colsA = a.columns.filter((c) => !keySet.has(c.name.toLowerCase())).map((c) => c.name);
@@ -176,11 +188,12 @@ function diffRows(db: Database, a: TableInfo, b: TableInfo, d: TableDiff): void 
   const cmpCols = common.filter((c) => !keySet.has(c.toLowerCase()));
   d.changed.columns = cmpCols;
   if (cmpCols.length === 0) return;
-  const differs = cmpCols.map((c) => `a.${q(c)} IS NOT b.${q(c)}`).join(' OR ');
+  const cellDiffers = cmpCols.map((c) => `(a.${q(c)} COLLATE BINARY IS NOT b.${q(c)})`);
+  const differs = cellDiffers.join(' OR ');
   const changedFrom = `FROM ${A} a JOIN ${B} b ON ${match} WHERE ${differs}`;
   d.changed.count = num(scalar(db, `SELECT count(*) ${changedFrom}`));
   if (d.changed.count) {
-    const sel = [...keyA, ...cmpCols.map((c) => 'a.' + q(c)), ...cmpCols.map((c) => 'b.' + q(c))].join(', ');
+    const sel = [...keyA, ...cmpCols.map((c) => 'a.' + q(c)), ...cmpCols.map((c) => 'b.' + q(c)), ...cellDiffers].join(', ');
     d.changed.rows = all(db, `SELECT ${sel} ${changedFrom} LIMIT ${COMPARE_ROW_LIMIT}`).map((r): CompareChangedRow => {
       const k = keyA.length;
       const n = cmpCols.length;
@@ -188,9 +201,14 @@ function diffRows(db: Database, a: TableInfo, b: TableInfo, d: TableDiff): void 
         key: r.slice(0, k).map((v) => encodeCell(v)),
         before: r.slice(k, k + n).map((v) => encodeCell(v)),
         after: r.slice(k + n, k + 2 * n).map((v) => encodeCell(v)),
+        changed: r.slice(k + 2 * n, k + 3 * n).map((v) => num(v) === 1),
       };
     });
   }
+}
+
+function hasNullKey(db: Database, table: string, pk: string[]): boolean {
+  return !!one(db, `SELECT 1 FROM ${table} WHERE ${pk.map((c) => `${q(c)} IS NULL`).join(' OR ')} LIMIT 1`);
 }
 
 /** Row = [key..., values...] → [key cell, values...] with composite keys joined for display. */
