@@ -285,7 +285,7 @@ export class DbSession {
     return this.dbSize() > this.opts.undoBudgetBytes ? null : this.db.export();
   }
 
-  private snapshotEdit(label: string, schema: boolean, before: Uint8Array | null, redoFn: () => void): EditInfo {
+  private snapshotEdit(label: string, schema: boolean, before: Uint8Array | null, redoFn: () => void, rawRedo = false): EditInfo {
     if (!before) {
       return this.register({ label, schema, undoable: false, undo() {}, redo() {}, bytes: () => 0 });
     }
@@ -297,11 +297,14 @@ export class DbSession {
       undoable: true,
       undo: () => {
         if (!beforeSnap) throw new Error('This change can no longer be undone.');
-        after = this.db.export();
+        const image = this.db.export();
+        // Keep the redo image only when both images fit the budget; otherwise redo re-applies the change.
+        after = beforeSnap.length + image.length <= this.opts.undoBudgetBytes ? image : null;
         this.replace(beforeSnap);
       },
       redo: () => {
         if (after) this.replace(after);
+        else if (rawRedo) redoFn();
         else transaction(this.db, redoFn);
       },
       bytes: () => (beforeSnap?.length ?? 0) + (after?.length ?? 0),
@@ -616,8 +619,15 @@ export class DbSession {
         this.db.run('ROLLBACK');
         notes.push('The open transaction was rolled back because of the error.');
       } else {
-        this.db.run('COMMIT');
-        notes.push('The open transaction was committed. Use Undo to revert it.');
+        try {
+          this.db.run('COMMIT');
+          notes.push('The open transaction was committed. Use Undo to revert it.');
+        } catch (err) {
+          // e.g. a deferred foreign key violation: nothing from the transaction is kept.
+          this.db.run('ROLLBACK');
+          error = { message: err instanceof Error ? err.message : String(err), statementIndex: index, sql: 'COMMIT' };
+          notes.push('The open transaction could not be committed and was rolled back.');
+        }
       }
     }
     const sig1 = this.signature();
@@ -626,9 +636,16 @@ export class DbSession {
     if (schemaChanged) this.schemaCache = null;
     let edit: EditInfo | null = null;
     if (changed && !this.opts.readOnly) {
-      edit = this.snapshotEdit('Run SQL', schemaChanged, before, () => {
-        this.db.exec(sql);
-      });
+      edit = this.snapshotEdit(
+        'Run SQL',
+        schemaChanged,
+        before,
+        () => {
+          this.db.exec(sql);
+          if (this.inTransaction()) this.db.run('COMMIT');
+        },
+        true,
+      );
       if (tooLarge) notes.push('The database is larger than the undo memory limit, so this change cannot be undone.');
     }
     return { results, error, timeMs: performance.now() - t0, edit, schemaChanged, notes };
